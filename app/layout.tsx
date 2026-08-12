@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
 
@@ -13,11 +13,22 @@ export async function generateMetadata(): Promise<Metadata> {
     metadataBase,
     openGraph: {
       title: "镜谱 Shotprint",
-      description: "把一条短片拆成可复用的创作蓝图",
-      images: [{ url: new URL("/og.png", metadataBase).toString(), width: 1760, height: 917 }],
+      description: "从热议到镜头，逐帧有据。",
+      images: [{ url: new URL("/og.png", metadataBase).toString(), width: 1737, height: 905 }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: "镜谱 Shotprint",
+      description: "从热议到镜头，逐帧有据。",
+      images: [new URL("/og.png", metadataBase).toString()],
     },
   };
 }
+
+export const viewport: Viewport = {
+  colorScheme: "light",
+  themeColor: "#0b1115",
+};
 
 export default function RootLayout({
   children,

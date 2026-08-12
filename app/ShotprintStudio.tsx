@@ -625,29 +625,40 @@ export default function ShotprintStudio() {
   }, [activeShot, currentShot]);
 
   return (
-    <main>
+    <main id="main-content">
+      <a className="skip-link" href="#workspace">跳到分析工作台</a>
       <header className="topbar">
         <a className="wordmark" href="#top" aria-label="镜谱首页"><span className="mark">镜</span><span>镜谱 <i>SHOTPRINT</i></span></a>
         <nav aria-label="页面导航"><a href="#how">拆解逻辑</a><a href="#link-result">链接分析台</a><a href="#result">分析台</a><span className="status-dot">本地优先</span></nav>
       </header>
 
-      <section className="hero" id="top">
+      <section className="hero" id="top" aria-labelledby="hero-title">
         <div className="hero-copy">
-          <p className="eyebrow">AI FILM FORENSICS / 逐镜取证</p>
-          <h1>把一条短片，<br />拆成下一条的<span>蓝图。</span></h1>
-          <p className="lede">镜头在哪里切、情绪怎样爬坡、画面可能怎么生成——上传成片，镜谱把直觉翻译成可编辑、可导出的创作结构。</p>
+          <div className="hero-kicker"><span>SHOTPRINT / 镜谱</span><i>AI FILM FORENSICS</i></div>
+          <h1 id="hero-title">从热议到镜头，<br /><span>逐帧有据。</span></h1>
+          <p className="lede">识别一条短片为什么被看见、被共鸣、被争议，再把传播证据与真实时间码合成一份可编辑的创作蓝图。</p>
+          <div className="evidence-reel" aria-hidden="true">
+            <i className="reel-playhead" />
+            <span><small>00:00</small><b>钩子</b></span>
+            <span><small>00:03.8</small><b>切点</b></span>
+            <span><small>00:11.2</small><b>共鸣</b></span>
+            <span><small>00:20.8</small><b>蓝图</b></span>
+          </div>
           <div className="hero-notes"><span>01 本机找切点</span><span>02 百炼读视听</span><span>03 证据化推测</span></div>
         </div>
 
-        <div className="ingest-card">
-          <div className="card-head"><span>新建拆解</span><span className="mono">PROJECT / 001</span></div>
-          <div className="ingest-mode" role="tablist" aria-label="分析输入方式"><button className={inputMode === "link" ? "active" : ""} onClick={() => setInputMode("link")} role="tab" aria-selected={inputMode === "link"}>粘贴爆款链接</button><button className={inputMode === "video" ? "active" : ""} onClick={() => setInputMode("video")} role="tab" aria-selected={inputMode === "video"}>上传本地视频</button></div>
+        <div className="ingest-card" id="workspace">
+          <div className="card-head"><div><i /><span>新建分析</span></div><span className="mono">WORKSPACE / 001</span></div>
+          <div className="ingest-mode" role="tablist" aria-label="分析输入方式"><button className={inputMode === "link" ? "active" : ""} onClick={() => setInputMode("link")} role="tab" aria-selected={inputMode === "link"}>分析公开视频</button><button className={inputMode === "video" ? "active" : ""} onClick={() => setInputMode("video")} role="tab" aria-selected={inputMode === "video"}>拆解本地视频</button></div>
           <div className="sr-only"><input ref={fileInput} type="file" accept="video/mp4,video/quicktime,video/webm" aria-label="选择视频文件" onChange={handleInput} /><input ref={downloadedFileInput} type="file" accept="video/mp4,video/quicktime" aria-label="选择从GreenVideo下载的视频文件" onChange={handleDownloadedInput} /><span>我拥有该素材的分析权利</span><span>开始逐镜拆解（选择文件后自动运行）</span><span>打开 20.8 秒合成样片</span></div>
           {inputMode === "link" ? <div className="link-ingest">
             <label htmlFor="source-link">原视频链接</label>
-            <input ref={linkInputRef} id="source-link" value={link} onChange={(event) => handleLinkChange(event.target.value)} placeholder="抖音 / B站 / 小红书原链接" inputMode="url" />
-            <div className="link-detect"><span className={`platform-mini ${linkPlatform}`}>{linkPlatform === "douyin" ? "抖音" : linkPlatform === "bilibili" ? "B站" : linkPlatform === "xiaohongshu" ? "小红书" : "等待链接"}</span><span>{linkPhase === "collecting" ? "正在打开原页面并读取已加载评论…" : linkPhase === "analyzing" ? "评论已到达，正在组织证据…" : bridgeStatus === "ready" ? (linkPlatform === "unknown" ? "扩展已连接；粘贴链接后点击开始" : "链接已识别；点击下方按钮后自动注入取证脚本") : bridgeStatus === "old" ? `检测到旧版扩展；请重新加载 ${EXTENSION_VERSION}` : bridgeStatus === "checking" ? "正在检查取证桥…" : "未检测到取证桥；重新加载扩展后刷新网页"}</span></div>
-            <div className="link-self-check" role="status"><span>扩展 {bridgeDiagnostics?.version || (bridgeStatus === "old" ? "旧版" : "待检查")}</span><span>{bridgeStatus === "ready" ? "主采集通道可用" : bridgeStatus === "old" ? "版本过旧" : bridgeStatus === "missing" ? "桥接未连接" : "桥接检查中"}</span><span>{bridgeDiagnostics?.companion?.ok ? `高级兜底 ${bridgeDiagnostics.companion.version || "已运行"}` : "高级兜底未启动（不影响主采集）"}</span>{bridgeDiagnostics?.companion?.ok && <><span>{bridgeDiagnostics.companion.browserAct === "installed" ? "BrowserAct已安装" : "BrowserAct待检查"}</span><span>{bridgeDiagnostics.companion.chromeDirect ? "Chrome直连已配置" : "Chrome直连未配置"}</span><span>{linkPlatform === "unknown" ? "平台登录待检测" : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "ready" ? `${linkPlatform}页面可读` : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "login_required" ? `${linkPlatform}需要登录` : `${linkPlatform}登录状态未知`}</span><span>{pairingStatus === "paired" || bridgeDiagnostics.companion.paired ? "伴侣已配对" : "伴侣待配对"}</span></>}<span>{backendStatus === "aliyun" ? "阿里云分析后端正常" : backendStatus === "fallback" ? "分析后端回退到Sites" : "分析后端检查中"}</span><span>{searchStatus === "configured" ? "百炼联网已配置" : searchStatus === "disabled" ? "联网搜索不可用" : "联网搜索检查中"}</span><button className="diagnostic-copy" type="button" onClick={() => void downloadExtensionPackage()}>下载0.6.9扩展</button><button className="diagnostic-copy" type="button" onClick={() => void copyDiagnostics}>{diagnosticCopied ? "已复制安全诊断" : "复制安全诊断信息"}</button></div>
+            <div className="link-input-shell"><span aria-hidden="true">URL</span><input ref={linkInputRef} id="source-link" name="source-link" type="url" autoComplete="off" spellCheck={false} value={link} onChange={(event) => handleLinkChange(event.target.value)} placeholder="粘贴抖音、B站或小红书原链接…" inputMode="url" /></div>
+            <div className="link-detect" role="status" aria-live="polite"><span className={`platform-mini ${linkPlatform}`}>{linkPlatform === "douyin" ? "抖音" : linkPlatform === "bilibili" ? "B站" : linkPlatform === "xiaohongshu" ? "小红书" : "等待链接"}</span><span>{linkPhase === "collecting" ? "正在打开原页面并读取已加载评论…" : linkPhase === "analyzing" ? "评论已到达，正在组织证据…" : bridgeStatus === "ready" ? (linkPlatform === "unknown" ? "扩展已连接；粘贴链接后点击开始" : "链接已识别；点击下方按钮后自动注入取证脚本") : bridgeStatus === "old" ? `检测到旧版扩展；请重新加载 ${EXTENSION_VERSION}` : bridgeStatus === "checking" ? "正在检查取证桥…" : "未检测到取证桥；重新加载扩展后刷新网页"}</span></div>
+            <details className="system-check">
+              <summary><span>系统就绪度</span><b className={bridgeStatus === "ready" && backendStatus !== "checking" ? "ready" : "waiting"}>{bridgeStatus === "ready" ? "取证桥已连接" : "需要检查"}</b></summary>
+              <div className="link-self-check" role="status"><span>扩展 {bridgeDiagnostics?.version || (bridgeStatus === "old" ? "旧版" : "待检查")}</span><span>{bridgeStatus === "ready" ? "主采集通道可用" : bridgeStatus === "old" ? "版本过旧" : bridgeStatus === "missing" ? "桥接未连接" : "桥接检查中"}</span><span>{bridgeDiagnostics?.companion?.ok ? `高级兜底 ${bridgeDiagnostics.companion.version || "已运行"}` : "高级兜底未启动（不影响主采集）"}</span>{bridgeDiagnostics?.companion?.ok && <><span>{bridgeDiagnostics.companion.browserAct === "installed" ? "BrowserAct已安装" : "BrowserAct待检查"}</span><span>{bridgeDiagnostics.companion.chromeDirect ? "Chrome直连已配置" : "Chrome直连未配置"}</span><span>{linkPlatform === "unknown" ? "平台登录待检测" : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "ready" ? `${linkPlatform}页面可读` : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "login_required" ? `${linkPlatform}需要登录` : `${linkPlatform}登录状态未知`}</span><span>{pairingStatus === "paired" || bridgeDiagnostics.companion.paired ? "伴侣已配对" : "伴侣待配对"}</span></>}<span>{backendStatus === "aliyun" ? "阿里云分析后端正常" : backendStatus === "fallback" ? "分析后端回退到Sites" : "分析后端检查中"}</span><span>{searchStatus === "configured" ? "百炼联网已配置" : searchStatus === "disabled" ? "联网搜索不可用" : "联网搜索检查中"}</span><button className="diagnostic-copy" type="button" onClick={() => void downloadExtensionPackage()}>下载0.6.9扩展</button><button className="diagnostic-copy" type="button" onClick={() => void copyDiagnostics()}>{diagnosticCopied ? "已复制安全诊断" : "复制安全诊断信息"}</button></div>
+            </details>
             {bridgeDiagnostics?.companion?.ok && !(pairingStatus === "paired" || bridgeDiagnostics.companion.paired) && <div className="companion-pair"><label htmlFor="companion-code">本地伴侣配对码</label><input id="companion-code" inputMode="numeric" maxLength={6} value={pairingCode} onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6位配对码" /><button className="secondary" disabled={pairingStatus === "pairing"} onClick={() => void pairCompanion()}>{pairingStatus === "pairing" ? "配对中…" : "配对本地伴侣"}</button></div>}
             <div className="link-stages" aria-label="链接分析六阶段">{LINK_STAGES.map((stage, index) => { const status = linkStageStatus(index, linkPhase, linkStage, linkPlatform !== "unknown"); return <div className={status} key={stage}><span>0{index + 1}</span><b>{stage}</b><small>{status === "done" ? "已完成" : status === "active" ? "进行中" : "等待"}</small></div>; })}</div>
             <button className="primary link-primary" disabled={!link || bridgeStatus !== "ready" || ["collecting", "continuing", "researching", "cross-checking", "recording"].includes(linkPhase)} onClick={runLinkCollection}>{linkPhase === "collecting" ? "采集首批100条评论…" : bridgeStatus === "old" ? "请先更新扩展" : bridgeStatus !== "ready" ? "请先重新加载扩展" : "开始采集100条评论 →"}</button>
