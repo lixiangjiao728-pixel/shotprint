@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
 import { costConfig, getBudgetStatus, reserveAnalysisBudget, settleAnalysisBudget, usageCostMicros } from "../lib/cost-budget.ts";
 import type { ShotprintEnv } from "../lib/server.ts";
 
 class SqliteStatementAdapter {
-  private values: any[] = [];
+  private values: SQLInputValue[] = [];
   private statement: ReturnType<DatabaseSync["prepare"]>;
   constructor(statement: ReturnType<DatabaseSync["prepare"]>) { this.statement = statement; }
-  bind(...values: unknown[]) { this.values = values as any[]; return this; }
+  bind(...values: unknown[]) { this.values = values as SQLInputValue[]; return this; }
   async first<T>() { return (this.statement.get(...this.values) as T | undefined) ?? null; }
   async run<T>() {
     const result = this.statement.run(...this.values);

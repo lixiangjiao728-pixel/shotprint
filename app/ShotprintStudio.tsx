@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnalysisResult, analysisResultSchema, analysisToCsv, analysisToMarkdown, formatTime } from "../lib/analysis";
+import { AnalysisResult, analysisResultSchema, analysisToCsv, analysisToMarkdown, formatTime, sampleTimelineItems } from "../lib/analysis";
 import { demoAnalysis } from "../lib/demo-data";
 import LinkAnalysisDesk from "./LinkAnalysisDesk";
 import { detectPlatform, mergeLocalAudienceEvidence, type LinkAnalysis, type SupportedPlatform } from "../lib/link-analysis";
@@ -28,6 +28,7 @@ type ResearchProgress = { category?: string; completedQueries: number; totalQuer
 const EXTENSION_VERSION = "0.6.9";
 const MAX_VIDEO_DURATION_SECONDS = 300;
 const MAX_VIDEO_DURATION_MS = MAX_VIDEO_DURATION_SECONDS * 1000;
+const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
 const COLLECTION_LOAD_WATCHDOG_MS = 55000;
 const COLLECTION_STALL_WATCHDOG_MS = 18000;
 const LINK_STAGES = ["评论采集", "评论续采", "深度检索", "交叉核验", "视听分析", "综合报告"] as const;
@@ -75,7 +76,11 @@ function createVideoMetadata(file: File): Promise<{ durationMs: number; width: n
     video.addEventListener("loadedmetadata", () => { window.clearTimeout(metadataTimer); if (!Number.isFinite(video.duration) || video.duration <= 0) { URL.revokeObjectURL(url); reject(new Error("视频时长为0或无法读取；请重新导出文件。")); } }, { once: true });
     video.addEventListener("error", () => window.clearTimeout(metadataTimer), { once: true });
     video.preload = "metadata";
-    video.onloadedmetadata = () => resolve({ durationMs: Math.round(video.duration * 1000), width: video.videoWidth, height: video.videoHeight, url });
+    video.onloadedmetadata = () => {
+      const measured = Math.round(video.duration * 1000);
+      const durationMs = measured > MAX_VIDEO_DURATION_MS && measured <= MAX_VIDEO_DURATION_MS + 500 ? MAX_VIDEO_DURATION_MS : measured;
+      resolve({ durationMs, width: video.videoWidth, height: video.videoHeight, url });
+    };
     video.onerror = () => { URL.revokeObjectURL(url); reject(new Error("无法读取视频。请换成 MP4、MOV 或 WebM。")); };
     video.src = url;
   });
@@ -106,7 +111,7 @@ async function detectScenes(url: string, durationMs: number, onProgress: (value:
   canvas.width = 16; canvas.height = 9;
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("浏览器无法创建画面分析器。");
-  const intervalMs = durationMs > 90000 ? 500 : 250;
+  const intervalMs = Math.max(250, Math.ceil(durationMs / 300 / 250) * 250);
   const frames: Array<{ timeMs: number; luma: number[] }> = [];
   for (let timeMs = 0; timeMs < durationMs; timeMs += intervalMs) {
     if (signal.aborted) throw new DOMException("已取消", "AbortError");
@@ -299,7 +304,9 @@ export default function ShotprintStudio() {
   useEffect(() => {
     if (!analysis) return;
     const found = analysis.shots.findIndex((shot) => playhead >= shot.startMs && playhead < shot.endMs);
-    if (found >= 0 && found !== activeShot) setActiveShot(found);
+    if (found < 0 || found === activeShot) return;
+    const frame = window.requestAnimationFrame(() => setActiveShot(found));
+    return () => window.cancelAnimationFrame(frame);
   }, [activeShot, analysis, playhead]);
 
   const reset = useCallback(() => {
@@ -449,7 +456,7 @@ export default function ShotprintStudio() {
     autoAnalyzeRef.current = true;
     const accepted = ["video/mp4", "video/quicktime", "video/webm"];
     if (!accepted.includes(selected.type)) { autoAnalyzeRef.current = false; setError("仅支持 MP4、MOV、WebM。请先转换格式再试。"); setPhase("error"); return; }
-    if (selected.size > 157286400) { autoAnalyzeRef.current = false; setError("视频超过 150MB。请压缩文件，或截取 5 分钟内最想分析的段落。"); setPhase("error"); return; }
+    if (selected.size > MAX_VIDEO_BYTES) { autoAnalyzeRef.current = false; setError("视频超过 300MB。请压缩文件，或截取 5 分钟内最想分析的段落。"); setPhase("error"); return; }
     setPhase("reading"); setProgress(4);
     try {
       const metadata = await createVideoMetadata(selected);
@@ -506,7 +513,7 @@ export default function ShotprintStudio() {
       recorder.ondataavailable = (event) => {
         if (!event.data.size) return; recordingChunksRef.current.push(event.data);
         const size = recordingChunksRef.current.reduce((total, chunk) => total + chunk.size, 0); setRecordingBytes(size);
-        if (size >= 150 * 1024 * 1024) stopTabCapture();
+        if (size >= MAX_VIDEO_BYTES) stopTabCapture();
       };
       recorder.onerror = () => { setLinkPhase("awaiting-video"); setLinkError("标签页录制损坏或被浏览器中断，请重试或上传本地视频。"); };
       recorder.onstop = () => {
@@ -559,10 +566,26 @@ export default function ShotprintStudio() {
       }
       if (!uploadResponse.ok) throw new Error("视频直传 OSS 失败。请检查存储桶 CORS 后重试。");
       setPhase("analyzing"); setProgress(68);
-      const response = await fetch(apiUrl("/api/analyze"), {
+      let response = await fetch(apiUrl("/api/analyze"), {
         method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ objectKey: session.objectKey, uploadToken: session.uploadToken, mimeType: targetFile.type, durationMs: metadata.durationMs, localCuts }),
       });
+      if (response.status === 202) {
+        const accepted = await response.json() as { analysisJobId?: string; pollAfterMs?: number };
+        if (!accepted.analysisJobId) throw new Error("分析任务没有返回查询凭证，请重新上传。");
+        activeUpload = null;
+        const deadline = Date.now() + 15 * 60 * 1000;
+        let pollDelay = Math.max(1000, Math.min(5000, Number(accepted.pollAfterMs) || 2000));
+        while (Date.now() < deadline) {
+          await new Promise((resolve) => window.setTimeout(resolve, pollDelay));
+          if (controller.signal.aborted) throw new DOMException("已取消", "AbortError");
+          response = await fetch(apiUrl(`/api/analyze/jobs/${encodeURIComponent(accepted.analysisJobId)}`), { signal: controller.signal, cache: "no-store" });
+          if (response.status !== 202) break;
+          setProgress((current) => Math.min(94, current + 1));
+          pollDelay = Math.min(5000, Math.round(pollDelay * 1.15));
+        }
+        if (response.status === 202) throw new Error("300秒视频分析超过15分钟仍未完成；后台会继续清理临时文件，请稍后重试。");
+      }
       const payload = await response.json() as { result?: unknown; error?: string };
       activeUpload = null;
       if (!response.ok || !payload.result) throw new Error(payload.error || "模型没有返回可用结果。");
@@ -572,8 +595,15 @@ export default function ShotprintStudio() {
         setLinkStage(5); setLinkPhase("analyzing");
         try {
           const { evidence, digest } = buildResearchRequest(pendingLinkPayload);
-          const clip = (value: string) => value.slice(0, 300);
-          const compactVideoAnalysis = { metadata: { durationMs: parsed.metadata.durationMs }, shots: parsed.shots.slice(0, 60).map((shot) => ({ startMs: shot.startMs, endMs: shot.endMs, narrativeFunction: clip(shot.narrativeFunction), action: clip(shot.action), shotSize: clip(shot.shotSize), camera: clip(shot.camera), motion: clip(shot.motion), lighting: clip(shot.lighting), transcript: clip(shot.transcript), audio: clip(shot.audio), evidence: clip(shot.evidence), confidence: shot.confidence })) };
+          const clip = (value: string, length = 180) => value.slice(0, length);
+          const compactShots = sampleTimelineItems(parsed.shots, 72);
+          const compactVideoAnalysis = {
+            metadata: { title: clip(parsed.metadata.title, 120), durationMs: parsed.metadata.durationMs, aspectRatio: clip(parsed.metadata.aspectRatio, 32) },
+            shots: compactShots.map((shot) => ({ startMs: shot.startMs, endMs: shot.endMs, narrativeFunction: clip(shot.narrativeFunction), action: clip(shot.action), shotSize: clip(shot.shotSize), camera: clip(shot.camera), motion: clip(shot.motion), lighting: clip(shot.lighting), transcript: clip(shot.transcript), audio: clip(shot.audio), evidence: clip(shot.evidence), confidence: shot.confidence })),
+            narrative: Object.fromEntries(Object.entries(parsed.narrative).filter(([key]) => !["pace", "stats"].includes(key)).map(([key, value]) => [key, typeof value === "string" ? clip(value, 300) : value])),
+            productionHypotheses: parsed.productionHypotheses.slice(0, 12).map((item) => ({ category: clip(item.category, 80), estimate: clip(item.estimate, 240), evidence: clip(item.evidence, 240), confidence: item.confidence })),
+            reusableTemplate: Object.fromEntries(Object.entries(parsed.reusableTemplate).map(([key, values]) => [key, values.slice(0, 12).map((value) => clip(value, 300))])),
+          };
           const hasAudibleEvidence = parsed.shots.some((shot) => [shot.transcript, shot.audio].some((value) => value.trim() && value.trim().toLowerCase() !== "unknown"));
           const audioStatus = targetAudioPresent === false ? "missing" : targetAudioPresent === true || hasAudibleEvidence ? "detected" : "unknown";
           const aspectRatio = parsed.metadata.aspectRatio || (metadata.width && metadata.height ? `${metadata.width}:${metadata.height}` : "unknown");
@@ -682,7 +712,7 @@ export default function ShotprintStudio() {
               {file && <small>{file.name} · {(file.size / 1024 / 1024).toFixed(1)}MB · {phase === "idle" ? consent ? "即将自动分析" : "等待勾选授权" : PHASE_COPY[phase]}</small>}
               {captureWarning && <small>{captureWarning}</small>}
             </div>}
-            {linkPhase === "recording" && <div className="recording-live" role="status"><b>● {recordingPaused ? "录制已暂停" : "正在录制标签页"}</b><span>{recordingSeconds}s / 300s · {(recordingBytes / 1024 / 1024).toFixed(1)}MB / 150MB</span>{captureWarning && <small>{captureWarning}</small>}<div><button className="secondary" onClick={toggleTabCapturePause}>{recordingPaused ? "继续录制" : "暂停"}</button><button className="secondary" onClick={stopTabCapture}>停止并使用这段录制</button></div></div>}
+            {linkPhase === "recording" && <div className="recording-live" role="status"><b>● {recordingPaused ? "录制已暂停" : "正在录制标签页"}</b><span>{recordingSeconds}s / 300s · {(recordingBytes / 1024 / 1024).toFixed(1)}MB / 300MB</span>{captureWarning && <small>{captureWarning}</small>}<div><button className="secondary" onClick={toggleTabCapturePause}>{recordingPaused ? "继续录制" : "暂停"}</button><button className="secondary" onClick={stopTabCapture}>停止并使用这段录制</button></div></div>}
             {linkError && <div className="link-error"><b>采集没有继续</b><span>{linkError}</span><button onClick={() => setLinkError("")}>知道了</button></div>}
             <details className="manual-import"><summary>遇到验证码 / 403 / 429？改用手动评论</summary><p>每行粘贴一条公开评论；不上传账号、头像或用户 ID。评论只用于本次报告，刷新后即清除。</p><textarea value={manualComments} onChange={(event) => setManualComments(event.target.value)} placeholder="例如：第一秒就被吸引了\n这个转场太丝滑\n想看同系列第二集" rows={4} /><button className="secondary" disabled={!manualComments.trim() || linkPhase === "analyzing"} onClick={runManualLinkAnalysis}>用手动评论生成报告</button></details>
             <p className="link-risk">登录态只在你的浏览器里使用；镜谱不接收 Cookie、用户名、头像或用户 ID。遇到验证码、403 或 429 会停止。</p>
@@ -690,7 +720,7 @@ export default function ShotprintStudio() {
           </div> : <div className={`dropzone ${file ? "has-file" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
             <button className="drop-button" onClick={() => fileInput.current?.click()} aria-label="选择视频文件">
               <span className="film-hole">＋</span>
-              {file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(1)} MB · {phase === "idle" ? consent ? "即将自动分析" : "等待授权" : PHASE_COPY[phase]}</small></> : <><strong>把成片放到这里</strong><small>MP4 / MOV 优先 · WebM仅录制兜底 · ≤ 300 秒 · ≤ 150MB</small></>}
+              {file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(1)} MB · {phase === "idle" ? consent ? "即将自动分析" : "等待授权" : PHASE_COPY[phase]}</small></> : <><strong>把成片放到这里</strong><small>MP4 / MOV 优先 · WebM仅录制兜底 · ≤ 300 秒 · ≤ 300MB</small></>}
             </button>
             <div className="drop-rule" />
             {captureWarning && <p className="capture-warning">{captureWarning}</p>}

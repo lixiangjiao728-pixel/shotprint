@@ -12,13 +12,13 @@ export async function POST(request: Request) {
   let body: { fileName?: string; mimeType?: string; size?: number; durationMs?: number; consent?: boolean };
   try { body = await request.json(); } catch { return jsonError("上传参数不是有效 JSON。", 400); }
   const allowed = ["video/mp4", "video/quicktime", "video/webm"];
-  const configuredMaxBytes = Number(runtime.MAX_VIDEO_BYTES || 157286400);
+  const configuredMaxBytes = Number(runtime.MAX_VIDEO_BYTES || 314572800);
   const configuredMaxDuration = Number(runtime.MAX_VIDEO_DURATION || 300) * 1000;
-  const maxBytes = Number.isFinite(configuredMaxBytes) && configuredMaxBytes > 0 ? configuredMaxBytes : 157286400;
+  const maxBytes = Number.isFinite(configuredMaxBytes) && configuredMaxBytes > 0 ? configuredMaxBytes : 314572800;
   const maxDuration = Number.isFinite(configuredMaxDuration) && configuredMaxDuration > 0 ? configuredMaxDuration : 300_000;
   if (!body.consent) return jsonError("请先确认你拥有素材的分析权利。", 400);
   if (!body.fileName || !body.mimeType || !allowed.includes(body.mimeType)) return jsonError("仅支持 MP4、MOV、WebM。", 415);
-  if (typeof body.size !== "number" || !Number.isSafeInteger(body.size) || body.size <= 0 || body.size > maxBytes) return jsonError("视频大小无效或超过当前 150MB 上限。", 413);
+  if (typeof body.size !== "number" || !Number.isSafeInteger(body.size) || body.size <= 0 || body.size > maxBytes) return jsonError("视频大小无效或超过当前 300MB 上限。", 413);
   if (typeof body.durationMs !== "number" || !Number.isFinite(body.durationMs) || body.durationMs <= 0 || body.durationMs > maxDuration) return jsonError("视频时长无效或超过当前 300 秒上限。", 413);
   try {
     const budget = await getBudgetStatus(runtime);

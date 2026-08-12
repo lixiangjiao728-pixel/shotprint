@@ -1,4 +1,4 @@
-import { analysisResultSchema, normalizeAnalysis, validateEvidenceCoverage, type AnalysisResult } from "../../../lib/analysis";
+import { analysisResultSchema, normalizeAnalysis, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../../../lib/analysis";
 import { deleteOssObject, inspectOssObject, normalizeBailianBaseUrl, presignOssUrl, verifyUploadToken } from "../../../lib/aliyun";
 import { reserveAnalysisBudget, settleAnalysisBudget, usageCostMicros, type BailianUsage } from "../../../lib/cost-budget";
 import { getEnv, jsonError } from "../../../lib/server";
@@ -20,25 +20,32 @@ const OUTPUT_EXAMPLE = JSON.stringify({
   },
   productionHypotheses: [{ category: "unknown", estimate: "unknown", evidence: "unknown", confidence: 0 }],
   reusableTemplate: {
-    storyVariables: ["unknown"], beatSheet: ["unknown"], globalVisualRules: ["unknown"], shotPrompts: ["unknown"],
-    negativeConstraints: ["unknown"], editAndSound: ["unknown"],
+    storyVariables: ["[原创主体]", "[原创冲突]", "[原创场景]"],
+    beatSheet: ["0–15%：在3秒内用可见动作建立困境", "15–70%：每20秒增加一条新信息", "70–100%：完成反转并留下0.8秒尾钩"],
+    globalVisualRules: ["9:16；主体眼线保持在上三分之一", "主色不超过3种", "连续镜头保持光向一致"],
+    shotPrompts: ["中景，原创主体完成明确动作，固定机位，侧光，3秒，保留环境声", "近景，原创证据进入画面，缓慢推镜，冷色，2秒，加入落点音效", "特写，原创主体做出反应，平视固定，逆光，2秒，对白后留白0.3秒"],
+    negativeConstraints: ["不复制原人物身份", "不复制原台词", "不使用原作品标识"],
+    editAndSound: ["前3秒完成第一个信息变化", "每个转折前留0.3秒声音空隙", "结尾保留0.8秒黑场与尾音"],
   },
   warnings: ["unknown"],
   provenance: { model: "qwen3.5-omni-plus", localCutCount: 0, note: "unknown" },
 });
 
 function rawEvidencePrompt(durationMs: number, cuts: number[]) {
+  const auditWindows = Array.from({ length: Math.ceil(durationMs / 60_000) }, (_, index) => `${index * 60_000}–${Math.min(durationMs, (index + 1) * 60_000)}ms`).join("、");
   return `你是影视视听取证员。逐段观看并聆听这条短片，输出一份可供另一个模型整理的中文证据记录，不要输出schema或模板。
 
 必须覆盖：真实起止时间码、画面主体与动作、景别、机位、运动、灯光、色彩、可听到的对白/旁白、音乐、音效、叙事作用，以及每项是观察事实还是推测。听不清或看不清写unknown；“未检测到”不等于“没有”。
 
-本机候选切点：${cuts.join(", ")}；浏览器读取总时长：${durationMs}ms。证据需覆盖从0ms到${durationMs}ms，不能使用固定时长。每段附0–1置信度。不要猜seed、checkpoint或原提示词。`;
+浏览器读取总时长：${durationMs}ms。按这些审计区间逐段检查，任何区间都不能跳过：${auditWindows}。先列逐镜证据，再单列开头15%、中段35–65%、结尾15%的叙事变化。
+
+本机候选切点（毫秒，仅作为复核线索，不得盲从）：${cuts.join(", ")}。证据必须连续覆盖0ms到${durationMs}ms；长视频不能只写开头或用几个泛化长镜头代替逐段观察。每段附0–1置信度。不要猜seed、checkpoint或原提示词。`;
 }
 
 function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[], repairIssues?: string[]) {
   return `你是视听证据结构整理器。只依据下方“原始视听证据”整理 AnalysisResult v1 JSON，不添加原始证据没有的事实。
 
-硬规则：不能从成片确认的内容写 unknown；生产参数只能写带画面或声音证据与 0–1 置信度的推测；不复制角色身份、原台词或作品标识；所有时间用毫秒。
+硬规则：不能从成片确认的内容写 unknown；生产参数只能写带画面或声音证据与 0–1 置信度的推测；不复制角色身份、原台词或作品标识；所有时间用毫秒。metadata.title只有画面或声音明确显示片名时才能填写，否则写unknown。
 
 本机画面差异检测得到的候选边界：${cuts.join(", ")}；总时长必须为 ${durationMs}ms。模型判断与本机边界不一致时，以原始视听证据为准，但在 evidence 解释。
 
@@ -48,7 +55,9 @@ function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[]
 
 narrative：logline,hook,conflict,escalation,reversal,climax,resolution,pace[{label,timeMs,intensity}],stats{averageShotSeconds,fastestShotSeconds,dialogueRatio}。
 
-reusableTemplate：storyVariables,beatSheet,globalVisualRules,shotPrompts,negativeConstraints,editAndSound，均为字符串数组。provenance.model 写实际模型名，localCutCount 写 ${cuts.length}，note 解释边界。必须输出完整标准 JSON，不要 Markdown。
+reusableTemplate 必须是可以直接交给创作者执行的原创迁移方案：storyVariables至少3项；beatSheet至少3项且半数以上包含秒数、时间范围或百分比；globalVisualRules至少3项且使用可检查的构图、光色或连续性规则；shotPrompts至少3项，每项写清原创主体、动作、景别/机位、运动、灯光/色彩、建议时长与声音；negativeConstraints至少3项；editAndSound至少3项且写清节拍、帧数、秒数或声音落点。不得只写“保持节奏”“增强氛围”等空泛句子。
+
+provenance.model 写实际模型名，localCutCount 写 ${cuts.length}，note 解释边界。必须输出完整标准 JSON，不要 Markdown。
 
 类型硬规则：所有标为字符串的字段只能是 JSON string，无法判断时必须写字符串 "unknown"，绝不能写 null、对象、数组或数字；字符串数组的每一项也只能是字符串。严格仿照下面的键、层级和 JSON 类型，仅替换成视频分析值，不得改名或增加嵌套：
 ${repairIssues?.length ? `上一版结构问题：${repairIssues.join(",")}。只纠正结构和类型，不添加新事实。` : ""}
@@ -84,7 +93,7 @@ function parseJsonOutput(raw: string) {
   return JSON.parse(cleaned) as unknown;
 }
 
-async function callBailian(key: string, baseUrl: string, model: string, prompt: string, maxOutputTokens: number, videoUrl?: string, structured = false) {
+async function callBailian(key: string, baseUrl: string, model: string, prompt: string, maxOutputTokens: number, videoUrl?: string, structured = false, timeoutMs = 120_000) {
   const content: Array<{ type: "video_url"; video_url: { url: string } } | { type: "text"; text: string }> = [];
   if (videoUrl) content.push({ type: "video_url", video_url: { url: videoUrl } });
   content.push({ type: "text", text: prompt });
@@ -104,12 +113,22 @@ async function callBailian(key: string, baseUrl: string, model: string, prompt: 
       max_tokens: maxOutputTokens,
       ...(structured ? { response_format: { type: "json_object" } } : {}),
     }),
-    signal: AbortSignal.timeout(videoUrl ? 240_000 : 120_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error(`Bailian analysis failed: ${response.status}`);
   const output = outputFromSse(await response.text());
   if (!output.text) throw new Error("Bailian returned no text");
   return output;
+}
+
+function validateCandidate(candidate: unknown, durationMs: number, localCuts: number[]) {
+  const parsed = analysisResultSchema.safeParse(candidate);
+  if (!parsed.success) return { result: null, issues: parsed.error.issues.slice(0, 12).map((issue) => `${issue.path.join(".")}:${issue.code}`) };
+  const result = normalizeAnalysis(parsed.data, localCuts);
+  const evidenceIssue = validateEvidenceCoverage(result, durationMs, localCuts);
+  const actionabilityIssue = validateActionability(result);
+  const issues = [evidenceIssue, actionabilityIssue].filter((issue): issue is string => Boolean(issue));
+  return { result: issues.length ? null : result, issues };
 }
 
 export async function POST(request: Request) {
@@ -157,31 +176,25 @@ export async function POST(request: Request) {
   try {
     const baseUrl = normalizeBailianBaseUrl(runtime.DASHSCOPE_BASE_URL);
     const videoUrl = await presignOssUrl(runtime, "GET", body.objectKey, { ttlSeconds: 1200 });
-    const evidenceCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, model, rawEvidencePrompt(body.durationMs, localCuts), Math.min(8000, reservation.config.maxOutputTokens), videoUrl, false);
+    const videoTimeoutMs = Math.min(600_000, Math.max(240_000, body.durationMs * 2));
+    const evidenceTokens = Math.min(body.durationMs >= 180_000 ? 12_000 : 8_000, reservation.config.maxOutputTokens);
+    const evidenceCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, model, rawEvidencePrompt(body.durationMs, localCuts), evidenceTokens, videoUrl, false, videoTimeoutMs);
     actualCostMicros += usageCostMicros(evidenceCall.usage, reservation.config);
     const structureModel = runtime.DASHSCOPE_SEARCH_MODEL || "qwen-plus";
-    const structureCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, localCuts), reservation.config.maxOutputTokens, undefined, true);
+    const structureCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, localCuts), reservation.config.maxOutputTokens, undefined, true, 180_000);
     actualCostMicros += usageCostMicros(structureCall.usage, reservation.config);
-    let raw = structureCall.text;
     let candidate: unknown;
-    try { candidate = parseJsonOutput(raw); } catch { candidate = null; }
-    const firstValidation = analysisResultSchema.safeParse(candidate);
-    if (!firstValidation.success) {
-      const issueSummary = firstValidation.error.issues.slice(0, 12).map((issue) => `${issue.path.join(".")}:${issue.code}`);
-      console.warn("Bailian schema validation failed; repairing", issueSummary);
-      const repairCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, localCuts, issueSummary), reservation.config.maxOutputTokens, undefined, true);
+    try { candidate = parseJsonOutput(structureCall.text); } catch { candidate = null; }
+    let validation = validateCandidate(candidate, body.durationMs, localCuts);
+    if (!validation.result) {
+      console.warn("Bailian result validation failed; repairing", validation.issues);
+      const repairCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, localCuts, validation.issues), reservation.config.maxOutputTokens, undefined, true, 180_000);
       actualCostMicros += usageCostMicros(repairCall.usage, reservation.config);
-      raw = repairCall.text;
-      candidate = parseJsonOutput(raw);
+      try { candidate = parseJsonOutput(repairCall.text); } catch { candidate = null; }
+      validation = validateCandidate(candidate, body.durationMs, localCuts);
     }
-    const finalValidation = analysisResultSchema.safeParse(candidate);
-    if (!finalValidation.success) {
-      failureStage = `schema:${finalValidation.error.issues.slice(0, 12).map((issue) => `${issue.path.join(".")}:${issue.code}`).join(",")}`;
-      throw new Error("Bailian response failed AnalysisResult v1 validation");
-    }
-    result = normalizeAnalysis(finalValidation.data, localCuts);
-    const coverageError = validateEvidenceCoverage(result, body.durationMs);
-    if (coverageError) { failureStage = coverageError; throw new Error(coverageError); }
+    if (!validation.result) { failureStage = validation.issues.join(",") || "result_invalid"; throw new Error(failureStage); }
+    result = validation.result;
     result.provenance = { ...result.provenance, model: `${model} → ${structureModel}`, note: `${result.provenance.note}; provider=aliyun-bailian; raw-evidence=omni; structuring=qwen-plus` };
   } catch (error) {
     if (failureStage === "unknown") failureStage = error instanceof Error ? error.message.slice(0, 160) : "unknown";

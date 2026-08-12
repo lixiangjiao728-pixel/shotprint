@@ -15,6 +15,7 @@ runtime.STATE_STORE = new OssStateStore(runtime);
 const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || "https://shotprint.xyz,https://shotprint-ai-film.lixiangjia27.chatgpt.site,http://localhost:3000,http://127.0.0.1:3000").split(",").map((value) => value.trim()).filter(Boolean));
 const maxBodyBytes = 32 * 1024 * 1024;
 const researchJobTtlMs = 10 * 60 * 1000;
+const analysisJobTtlMs = 30 * 60 * 1000;
 
 type ResearchJob = {
   status: "pending" | "complete" | "failed";
@@ -24,8 +25,48 @@ type ResearchJob = {
   errorCode?: string;
   userMessage?: string;
 };
+type AnalysisJob = {
+  status: "pending" | "complete" | "failed";
+  createdAt: string;
+  expiresAt: string;
+  result?: unknown;
+  userMessage?: string;
+};
 
 function researchJobKey(id: string) { return `research-jobs/${id}.json`; }
+function analysisJobKey(id: string) { return `analysis-jobs/${id}.json`; }
+
+async function startAnalysisJob(request: Request) {
+  if (!runtime.STATE_STORE) return Response.json({ error: "ANALYSIS_JOB_STORE_UNAVAILABLE" }, { status: 503 });
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const base: AnalysisJob = { status: "pending", createdAt: new Date(now).toISOString(), expiresAt: new Date(now + analysisJobTtlMs).toISOString() };
+  await runtime.STATE_STORE.putJson(analysisJobKey(id), base);
+  void (async () => {
+    try {
+      const response = await analyze(request);
+      const payload = await response.json().catch(() => ({ error: "分析服务返回了无效结果。" }));
+      const status = response.ok && payload && typeof payload === "object" && "result" in payload ? "complete" : "failed";
+      const userMessage = status === "failed" && payload && typeof payload === "object" ? String((payload as { error?: string }).error || "视频分析未完成，请重新上传后重试。") : undefined;
+      await runtime.STATE_STORE!.putJson(analysisJobKey(id), { ...base, status, ...(status === "complete" ? { result: payload } : {}), ...(userMessage ? { userMessage } : {}) } satisfies AnalysisJob);
+    } catch {
+      await runtime.STATE_STORE!.putJson(analysisJobKey(id), { ...base, status: "failed", userMessage: "视频分析意外中断，请重新上传后重试。" } satisfies AnalysisJob).catch(() => undefined);
+    }
+  })();
+  return Response.json({ status: "accepted", analysisJobId: id, pollAfterMs: 2000 }, { status: 202, headers: { "cache-control": "no-store" } });
+}
+
+async function readAnalysisJob(id: string) {
+  if (!runtime.STATE_STORE || !/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ error: "ANALYSIS_JOB_NOT_FOUND" }, { status: 404 });
+  const job = await runtime.STATE_STORE.getJson<AnalysisJob>(analysisJobKey(id));
+  if (!job || Date.parse(job.expiresAt) <= Date.now()) {
+    if (job) await runtime.STATE_STORE.delete(analysisJobKey(id)).catch(() => undefined);
+    return Response.json({ error: "ANALYSIS_JOB_EXPIRED" }, { status: 404 });
+  }
+  if (job.status === "complete") return Response.json(job.result, { headers: { "cache-control": "no-store" } });
+  if (job.status === "failed") return Response.json({ error: job.userMessage || "视频分析未完成，请重新上传后重试。" }, { status: 502, headers: { "cache-control": "no-store" } });
+  return Response.json({ status: "pending" }, { status: 202, headers: { "cache-control": "no-store" } });
+}
 
 async function startResearchJob(request: Request) {
   if (!runtime.STATE_STORE) return Response.json({ error: "RESEARCH_JOB_STORE_UNAVAILABLE" }, { status: 503 });
@@ -101,7 +142,9 @@ async function route(request: Request) {
   if (researchJobMatch && request.method === "GET") return readResearchJob(researchJobMatch[1]);
   if (path === "/api/upload-session" && request.method === "POST") return createUploadSession(request);
   if (path === "/api/upload-session" && request.method === "DELETE") return deleteUploadSession(request);
-  if (path === "/api/analyze" && request.method === "POST") return analyze(request);
+  if (path === "/api/analyze" && request.method === "POST") return startAnalysisJob(request);
+  const analysisJobMatch = path.match(/^\/api\/analyze\/jobs\/([0-9a-f-]{36})$/i);
+  if (analysisJobMatch && request.method === "GET") return readAnalysisJob(analysisJobMatch[1]);
   return Response.json({ error: "NOT_FOUND" }, { status: 404 });
 }
 

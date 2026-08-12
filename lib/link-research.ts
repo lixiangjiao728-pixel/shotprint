@@ -25,8 +25,15 @@ export type ResearchBundle = { queries: Array<{ id: string; category: ResearchCa
 export type ResearchReceipt = { status: "complete" | "partial" | "blocked"; queryCount: number; sourceCount: number; domainCount: number; costCny: number; retrievedAt: string; errorCode?: string; originalCommentCount?: number; commentEvidenceCount?: number };
 
 export function buildResearchQueries(input: { platform: string; title?: string; author?: string; description?: string; videoId?: string; keywords?: string; url: string }) {
-  const title = input.title?.trim() ? `“${input.title.trim()}”` : "标题未知";
-  const identity = [input.platform, title, input.author, input.videoId, input.description, input.keywords].filter(Boolean).join(" ").slice(0, 300);
+  const genericTitle = /^(待从原页面读取标题|标题未知|抖音|哔哩哔哩|bilibili|小红书)$/i;
+  const title = input.title?.trim() && !genericTitle.test(input.title.trim()) ? `“${input.title.trim()}”` : "";
+  let canonicalUrl = input.url;
+  let derivedId = "";
+  try {
+    const parsed = new URL(input.url); parsed.hash = ""; canonicalUrl = parsed.toString();
+    derivedId = parsed.pathname.match(/\/(?:video|explore)\/([A-Za-z0-9]+)/)?.[1] || "";
+  } catch { /* The route validates the URL before this helper is called. */ }
+  const identity = [input.platform, title, input.author, input.videoId || derivedId, input.description, input.keywords, canonicalUrl].filter(Boolean).join(" ").slice(0, 500);
   const specs: Array<[ResearchCategory, string, 30 | 180 | undefined]> = [
     ["original-and-reposts", `${identity} 原视频 转载 二创 传播`, 30],
     ["author-context", `${identity} 作者 账号 背景 过往作品`, 180],
@@ -37,7 +44,7 @@ export function buildResearchQueries(input: { platform: string; title?: string; 
     ["platform-spread", `${identity} 平台传播 推荐 转发 收藏 二创`, 30],
     ["media-industry", `${identity} 媒体 行业 报道 趋势`, 180],
   ];
-  return specs.map(([category, query, freshness], index) => ({ id: `Q${String(index + 1).padStart(2, "0")}`, category, query: `${query} ${input.url}`.slice(0, 500), ...(freshness ? { freshness } : {}) }));
+  return specs.map(([category, query, freshness], index) => ({ id: `Q${String(index + 1).padStart(2, "0")}`, category, query: query.slice(0, 500), ...(freshness ? { freshness } : {}) }));
 }
 
 function textValue(value: unknown) {

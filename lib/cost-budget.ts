@@ -63,7 +63,7 @@ function positiveNumber(value: string | undefined, fallback: number, name: strin
 }
 
 export function costConfig(runtime: ShotprintEnv, options: BudgetOptions = {}): CostConfig {
-  const limitCny = positiveNumber(runtime.COST_LIMIT_CNY, 10, "COST_LIMIT_CNY");
+  const limitCny = positiveNumber(runtime.COST_LIMIT_CNY, 20, "COST_LIMIT_CNY");
   const inputCnyPerMillion = positiveNumber(runtime.COST_INPUT_CNY_PER_MILLION, 7, "COST_INPUT_CNY_PER_MILLION");
   const outputCnyPerMillion = positiveNumber(runtime.COST_OUTPUT_CNY_PER_MILLION, 40, "COST_OUTPUT_CNY_PER_MILLION");
   const maxInputTokens = Math.floor(options.maxInputTokens ?? positiveNumber(runtime.COST_MAX_INPUT_TOKENS, 196608, "COST_MAX_INPUT_TOKENS"));

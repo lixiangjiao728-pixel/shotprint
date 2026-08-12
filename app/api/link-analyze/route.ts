@@ -198,7 +198,23 @@ function sanitizeVideoEvidence(value: unknown) {
     for (const key of ["narrativeFunction", "action", "shotSize", "camera", "motion", "lighting", "transcript", "audio", "evidence"]) if (typeof item[key] === "string") safe[key] = item[key].slice(0, 500);
     return safe;
   }).filter((shot): shot is Record<string, unknown> => shot !== null) : [];
-  return { metadata: { durationMs: typeof metadata.durationMs === "number" ? metadata.durationMs : undefined }, shots };
+  const text = (input: unknown, max = 300) => typeof input === "string" ? input.slice(0, max) : undefined;
+  const stringList = (input: unknown, maxItems = 12) => Array.isArray(input) ? input.filter((item): item is string => typeof item === "string").slice(0, maxItems).map((item) => item.slice(0, 300)) : [];
+  const narrativeInput = input.narrative && typeof input.narrative === "object" ? input.narrative as Record<string, unknown> : {};
+  const narrative = Object.fromEntries(["logline", "hook", "conflict", "escalation", "reversal", "climax", "resolution"].flatMap((key) => {
+    const value = text(narrativeInput[key]); return value ? [[key, value]] : [];
+  }));
+  const productionHypotheses = Array.isArray(input.productionHypotheses) ? input.productionHypotheses.slice(0, 12).flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    return [{ category: text(record.category, 80), estimate: text(record.estimate, 240), evidence: text(record.evidence, 240), confidence: typeof record.confidence === "number" ? Math.max(0, Math.min(1, record.confidence)) : 0 }];
+  }) : [];
+  const templateInput = input.reusableTemplate && typeof input.reusableTemplate === "object" ? input.reusableTemplate as Record<string, unknown> : {};
+  const reusableTemplate = {
+    storyVariables: stringList(templateInput.storyVariables), beatSheet: stringList(templateInput.beatSheet), globalVisualRules: stringList(templateInput.globalVisualRules),
+    shotPrompts: stringList(templateInput.shotPrompts), negativeConstraints: stringList(templateInput.negativeConstraints), editAndSound: stringList(templateInput.editAndSound),
+  };
+  return { metadata: { title: text(metadata.title, 120), durationMs: typeof metadata.durationMs === "number" ? metadata.durationMs : undefined, aspectRatio: text(metadata.aspectRatio, 32) }, shots, narrative, productionHypotheses, reusableTemplate };
 }
 
 export async function GET() {

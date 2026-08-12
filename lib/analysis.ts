@@ -60,18 +60,48 @@ export const analysisResultSchema = z.object({
 export type AnalysisResult = z.infer<typeof analysisResultSchema>;
 export type Shot = z.infer<typeof shotSchema>;
 
-export function validateEvidenceCoverage(result: AnalysisResult, expectedDurationMs: number) {
+export function validateEvidenceCoverage(result: AnalysisResult, expectedDurationMs: number, localCuts: number[] = []) {
   const sorted = [...result.shots].sort((a, b) => a.startMs - b.startMs);
   if (Math.abs(result.metadata.durationMs - expectedDurationMs) > 500) return "duration_mismatch";
   if (!sorted.length || sorted[0].startMs > 500 || sorted.at(-1)!.endMs < expectedDurationMs - 500) return "timeline_incomplete";
   if (expectedDurationMs >= 15_000 && sorted.length < 3) return "shot_evidence_insufficient";
+  if (expectedDurationMs >= 120_000 && sorted.length < Math.ceil(expectedDurationMs / 60_000) + 1) return "long_video_evidence_sparse";
   for (let index = 0; index < sorted.length; index += 1) {
     const shot = sorted[index];
     if (shot.endMs <= shot.startMs || shot.endMs > expectedDurationMs + 500) return "timecode_invalid";
     if (index > 0 && shot.startMs > sorted[index - 1].endMs + 500) return "timeline_gap";
     if (!shot.evidence.trim() || shot.evidence.trim().toLowerCase() === "unknown") return "visual_evidence_missing";
   }
+  const paceTimes = result.narrative.pace.map((point) => point.timeMs);
+  if (!paceTimes.some((time) => time <= expectedDurationMs * .15)
+    || !paceTimes.some((time) => time >= expectedDurationMs * .35 && time <= expectedDurationMs * .65)
+    || !paceTimes.some((time) => time >= expectedDurationMs * .85)) return "narrative_coverage_incomplete";
+  const internalCuts = localCuts.filter((cut) => cut > 0 && cut < expectedDurationMs);
+  if (internalCuts.length >= 4) {
+    const modelBoundaries = sorted.slice(1).map((shot) => shot.startMs);
+    const matched = internalCuts.filter((cut) => modelBoundaries.some((boundary) => Math.abs(boundary - cut) <= 1500)).length;
+    if (matched / internalCuts.length < .45) return "local_cut_recall_low";
+  }
   return null;
+}
+
+export function validateActionability(result: AnalysisResult) {
+  const template = result.reusableTemplate;
+  if (template.storyVariables.length < 3) return "story_variables_insufficient";
+  if (template.beatSheet.length < 3 || template.beatSheet.filter((item) => /\d|%|秒|分钟/.test(item)).length < Math.ceil(template.beatSheet.length / 2)) return "beat_sheet_not_operational";
+  if (template.globalVisualRules.length < 3) return "visual_rules_insufficient";
+  if (template.shotPrompts.length < Math.min(3, result.shots.length)
+    || template.shotPrompts.some((item) => item.length < 16 || !/主体|人物|动作|景|镜头|机位|运动|推近|手持|光|色|声音|秒/.test(item))) return "shot_prompts_not_operational";
+  if (template.negativeConstraints.length < 3) return "negative_constraints_insufficient";
+  if (template.editAndSound.length < 3 || !template.editAndSound.some((item) => /\d|帧|秒|节拍|音乐|音效|对白|旁白/.test(item))) return "edit_sound_plan_not_operational";
+  return null;
+}
+
+export function sampleTimelineItems<T extends { startMs: number; endMs: number }>(items: T[], limit: number) {
+  if (items.length <= limit) return items;
+  if (limit < 2) return items.slice(0, Math.max(0, limit));
+  const indices = Array.from({ length: limit }, (_, index) => Math.round(index * (items.length - 1) / (limit - 1)));
+  return [...new Set(indices)].map((index) => items[index]);
 }
 
 export const DEMO_BOUNDARIES = [0, 2600, 5100, 7200, 9400, 12100, 15100, 17800, 20800];
@@ -99,7 +129,8 @@ export function analysisToMarkdown(result: AnalysisResult) {
   const shots = result.shots.map((shot, index) =>
     `### ${String(index + 1).padStart(2, "0")} · ${formatTime(shot.startMs)}–${formatTime(shot.endMs)}\n- 画面：${shot.action}\n- 镜头：${shot.shotSize} / ${shot.camera} / ${shot.motion}\n- 叙事作用：${shot.narrativeFunction}\n- 证据：${shot.evidence}（${Math.round(shot.confidence * 100)}%）`,
   ).join("\n\n");
-  return `# ${result.metadata.title} · 镜谱分析\n\n> ${result.narrative.logline}\n\n## 逐镜拆解\n\n${shots}\n\n## 可复用节拍\n\n${result.reusableTemplate.beatSheet.map((item) => `- ${item}`).join("\n")}\n\n## 全局视觉规则\n\n${result.reusableTemplate.globalVisualRules.map((item) => `- ${item}`).join("\n")}\n`;
+  const bullets = (items: string[]) => items.map((item) => `- ${item}`).join("\n") || "- unknown";
+  return `# ${result.metadata.title} · 镜谱分析\n\n> ${result.narrative.logline}\n\n## 逐镜拆解\n\n${shots}\n\n## 可执行节拍\n\n${bullets(result.reusableTemplate.beatSheet)}\n\n## 全局视觉规则\n\n${bullets(result.reusableTemplate.globalVisualRules)}\n\n## 镜头提示词骨架\n\n${bullets(result.reusableTemplate.shotPrompts)}\n\n## 剪辑与声音\n\n${bullets(result.reusableTemplate.editAndSound)}\n\n## 原创边界与失败约束\n\n${bullets(result.reusableTemplate.negativeConstraints)}\n`;
 }
 
 export function analysisToCsv(result: AnalysisResult) {
