@@ -473,7 +473,7 @@ export default function ShotprintStudio() {
   const handleDrop = (event: DragEvent<HTMLDivElement>) => { event.preventDefault(); const selected = event.dataTransfer.files?.[0]; if (selected) void chooseFile(selected); };
   const handleConsentChange = (checked: boolean) => {
     setConsent(checked);
-    if (checked && autoAnalyzeRef.current && file && videoUrl && phase === "idle") window.setTimeout(() => void runAnalysis(file, videoUrl, fileAcquisition, fileAudioPresent), 0);
+    if (checked && autoAnalyzeRef.current && file && videoUrl && phase === "idle") window.setTimeout(() => void runAnalysis(file, videoUrl, fileAcquisition, fileAudioPresent, true), 0);
   };
 
   const openGreenVideo = async () => {
@@ -537,8 +537,8 @@ export default function ShotprintStudio() {
     window.setTimeout(() => document.getElementById("result")?.scrollIntoView({ behavior: "smooth" }), 50);
   };
 
-  async function runAnalysis(targetFile = file, targetVideoUrl = videoUrl, targetAcquisition = fileAcquisition, targetAudioPresent = fileAudioPresent) {
-    if (!targetFile || !targetVideoUrl || !consent) return;
+  async function runAnalysis(targetFile = file, targetVideoUrl = videoUrl, targetAcquisition = fileAcquisition, targetAudioPresent = fileAudioPresent, targetConsent = consent) {
+    if (!targetFile || !targetVideoUrl || !targetConsent) return;
     autoAnalyzeRef.current = false;
     const controller = new AbortController(); abortRef.current = controller;
     let activeUpload: { objectKey: string; uploadToken: string } | null = null;

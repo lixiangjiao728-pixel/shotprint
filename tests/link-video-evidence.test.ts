@@ -60,6 +60,7 @@ test("GreenVideo flow opens a new tab, preserves link mode and auto-starts after
   assert.match(source, /window\.open\("https:\/\/greenvideo\.cc\/", "_blank"/);
   assert.match(source, /chooseFile\(selected, "download_upload"\)/);
   assert.match(source, /autoAnalyzeRef\.current/);
+  assert.match(source, /runAnalysis\(file, videoUrl, fileAcquisition, fileAudioPresent, true\)/);
   assert.match(source, /researchSessionId/);
   assert.equal(source.includes("researchToken"), false);
 });
