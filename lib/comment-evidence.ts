@@ -161,3 +161,13 @@ export async function readSafeApiError(response: Response, fallback: string) {
   }
   return `${fallback}（HTTP ${response.status}${rayId !== "unknown" ? ` · Ray ID ${rayId}` : ""}）`;
 }
+
+export async function readSafeApiJson<T>(response: Response, fallback: string): Promise<T> {
+  const body = await response.text();
+  if (!body.trim()) throw new Error(`${fallback}（HTTP ${response.status} · 服务端返回空响应）`);
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(`${fallback}（HTTP ${response.status} · 服务端响应不完整）`);
+  }
+}

@@ -6,7 +6,7 @@ import { demoAnalysis } from "../lib/demo-data";
 import LinkAnalysisDesk from "./LinkAnalysisDesk";
 import { detectPlatform, mergeLocalAudienceEvidence, type LinkAnalysis, type SupportedPlatform } from "../lib/link-analysis";
 import { demoLinkAnalysis } from "../lib/link-demo-data";
-import { buildResearchRequest, readSafeApiError } from "../lib/comment-evidence";
+import { buildResearchRequest, readSafeApiError, readSafeApiJson } from "../lib/comment-evidence";
 import { compareExtensionVersions, extensionCompatibility } from "../lib/extension-version";
 
 type Phase = "idle" | "reading" | "detecting" | "uploading" | "analyzing" | "ready" | "error";
@@ -551,7 +551,7 @@ export default function ShotprintStudio() {
         method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
         body: JSON.stringify({ fileName: targetFile.name, mimeType: targetFile.type, size: targetFile.size, durationMs: metadata.durationMs, consent: true }),
       });
-      const session = await sessionResponse.json() as { uploadUrl?: string; uploadToken?: string; objectKey?: string; uploadHeaders?: Record<string, string>; error?: string };
+      const session = await readSafeApiJson<{ uploadUrl?: string; uploadToken?: string; objectKey?: string; uploadHeaders?: Record<string, string>; error?: string }>(sessionResponse, "无法创建安全上传会话");
       if (!sessionResponse.ok || !session.uploadUrl || !session.uploadToken || !session.objectKey) throw new Error(session.error || "无法创建安全上传会话。");
       activeUpload = { objectKey: session.objectKey, uploadToken: session.uploadToken };
       let uploadResponse: Response;
@@ -571,7 +571,7 @@ export default function ShotprintStudio() {
         body: JSON.stringify({ objectKey: session.objectKey, uploadToken: session.uploadToken, mimeType: targetFile.type, durationMs: metadata.durationMs, localCuts }),
       });
       if (response.status === 202) {
-        const accepted = await response.json() as { analysisJobId?: string; pollAfterMs?: number };
+        const accepted = await readSafeApiJson<{ analysisJobId?: string; pollAfterMs?: number }>(response, "分析任务没有正常开始");
         if (!accepted.analysisJobId) throw new Error("分析任务没有返回查询凭证，请重新上传。");
         activeUpload = null;
         const deadline = Date.now() + 15 * 60 * 1000;
@@ -586,7 +586,7 @@ export default function ShotprintStudio() {
         }
         if (response.status === 202) throw new Error("300秒视频分析超过15分钟仍未完成；后台会继续清理临时文件，请稍后重试。");
       }
-      const payload = await response.json() as { result?: unknown; error?: string };
+      const payload = await readSafeApiJson<{ result?: unknown; error?: string }>(response, "分析服务没有返回完整结果");
       activeUpload = null;
       if (!response.ok || !payload.result) throw new Error(payload.error || "模型没有返回可用结果。");
       const parsed = analysisResultSchema.parse(payload.result);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCommentEvidence, buildResearchRequest, normalizeAudienceDigest, readSafeApiError } from "../lib/comment-evidence.ts";
+import { buildCommentEvidence, buildResearchRequest, normalizeAudienceDigest, readSafeApiError, readSafeApiJson } from "../lib/comment-evidence.ts";
 import { buildLinkAnalysis, linkAnalysisSchema, mergeLocalAudienceEvidence } from "../lib/link-analysis.ts";
 
 test("comment evidence contract keeps a representative, bounded and de-identified sample", () => {
@@ -85,6 +85,11 @@ test("non-JSON Cloudflare 403 becomes an explicit pre-worker error without claim
 test("JSON worker errors remain visible to the user", async () => {
   const response = Response.json({ error: "SEARCH_AUTH_FAILED：请检查模型权限。" }, { status: 403 });
   assert.equal(await readSafeApiError(response, "fallback"), "SEARCH_AUTH_FAILED：请检查模型权限。");
+});
+
+test("safe API JSON parsing replaces empty and truncated responses with actionable errors", async () => {
+  await assert.rejects(() => readSafeApiJson(new Response("", { status: 504 }), "分析服务没有返回完整结果"), /HTTP 504 · 服务端返回空响应/);
+  await assert.rejects(() => readSafeApiJson(new Response('{"result":', { status: 502 }), "分析服务没有返回完整结果"), /HTTP 502 · 服务端响应不完整/);
 });
 
 test("link report distinguishes collected comments from transmitted evidence", () => {
