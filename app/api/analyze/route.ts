@@ -39,6 +39,8 @@ function rawEvidencePrompt(durationMs: number, cuts: number[]) {
 
 浏览器读取总时长：${durationMs}ms。按这些审计区间逐段检查，任何区间都不能跳过：${auditWindows}。先列逐镜证据，再单列开头15%、中段35–65%、结尾15%的叙事变化。
 
+证据记录最多 48 个连续时间段。实际镜头更多时，合并相邻镜头并优先保留每个审计区间的开头、中部、结尾和候选切点附近变化；合并后的时间段仍必须从0ms连续覆盖到${durationMs}ms。重复或长镜头按审计区间记录可见的持续状态与变化，不要复制同一句结论充数。
+
 本机候选切点（毫秒，仅作为复核线索，不得盲从）：${cuts.join(", ")}。证据必须连续覆盖0ms到${durationMs}ms；长视频不能只写开头或用几个泛化长镜头代替逐段观察。每段附0–1置信度。不要猜seed、checkpoint或原提示词。`;
 }
 
@@ -52,6 +54,8 @@ function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[]
 顶层字段：version 固定 1.0；metadata(title,durationMs,aspectRatio,language,analyzedAt)；shots[]；narrative；productionHypotheses[]；reusableTemplate；warnings[]；provenance。
 
 每个 shot：id,startMs,endMs,transcript,shotSize,camera,motion,action,lighting,palette(十六进制色数组),audio,narrativeFunction,evidence,confidence,localBoundary。
+
+shots[] 最多 48 项；120秒以上至少 ${Math.ceil(durationMs / 60_000) + 1} 项。实际镜头超过48个时，把相邻镜头合并为连续证据段，优先保留本机候选边界附近的差异，但所有段仍须无空洞覆盖0ms到${durationMs}ms。每段 evidence 必须写明该时间范围内可见或可听的变化；重复画面也要如实写持续状态，不能虚构切点或叙事反转。
 
 narrative：logline,hook,conflict,escalation,reversal,climax,resolution,pace[{label,timeMs,intensity}],stats{averageShotSeconds,fastestShotSeconds,dialogueRatio}。
 

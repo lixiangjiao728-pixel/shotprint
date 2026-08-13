@@ -31,7 +31,7 @@ function runtime(): ShotprintEnv {
     COST_INPUT_CNY_PER_MILLION: "7",
     COST_OUTPUT_CNY_PER_MILLION: "40",
     COST_MAX_INPUT_TOKENS: "196608",
-    COST_MAX_OUTPUT_TOKENS: "12000",
+    COST_MAX_OUTPUT_TOKENS: "16000",
     COST_FIXED_CNY_PER_ANALYSIS: "0.2",
   };
 }
@@ -40,7 +40,7 @@ test("usage pricing uses Beijing input and output rates and reserves missing usa
   const config = costConfig(runtime());
   assert.equal(usageCostMicros({ prompt_tokens: 100_000, completion_tokens: 10_000 }, config), 1_100_000);
   assert.equal(usageCostMicros(null, config), config.maxMicrosPerCall);
-  assert.equal(config.reservationMicros, 3_912_512);
+  assert.equal(config.reservationMicros, 4_232_512);
 });
 
 test("budget reservations reject concurrent work that could exceed CNY 10", async () => {

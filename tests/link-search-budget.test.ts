@@ -10,7 +10,7 @@ test("search budget uses bounded native input/output reservation and usage alias
     COST_OUTPUT_CNY_PER_MILLION: "40",
     COST_FIXED_CNY_PER_ANALYSIS: "0.2",
     COST_MAX_INPUT_TOKENS: "196608",
-    COST_MAX_OUTPUT_TOKENS: "12000",
+    COST_MAX_OUTPUT_TOKENS: "16000",
   } as unknown as ShotprintEnv;
   const config = costConfig(runtime, { maxInputTokens: 8000, maxOutputTokens: 1200, maxModelCalls: 1 });
   assert.equal(config.maxInputTokens, 8000);

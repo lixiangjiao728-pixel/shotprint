@@ -80,14 +80,17 @@ test("research queries retain a stable URL/video identity when the page title is
 });
 
 test("five-minute production transport is asynchronous and accepts a 300MB upload boundary", async () => {
-  const [server, studio, uploadRoute] = await Promise.all([
+  const [server, studio, uploadRoute, analyzeRoute] = await Promise.all([
     readFile(new URL("../worker/aliyun-backend/server.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/ShotprintStudio.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/upload-session/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(server, /analysisJobId/);
   assert.match(server, /analysisJobMatch = path\.match/);
   assert.match(studio, /\/api\/analyze\/jobs\/\$\{encodeURIComponent\(accepted\.analysisJobId\)\}/);
   assert.match(studio, /Date\.now\(\) \+ 15 \* 60 \* 1000/);
   assert.match(uploadRoute, /314572800/);
+  assert.match(analyzeRoute, /证据记录最多 48 个连续时间段/);
+  assert.match(analyzeRoute, /shots\[\] 最多 48 项/);
 });
