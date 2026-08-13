@@ -104,6 +104,16 @@ export function sampleTimelineItems<T extends { startMs: number; endMs: number }
   return [...new Set(indices)].map((index) => items[index]);
 }
 
+export function sampleAuditCuts(cuts: number[], durationMs: number, limit = 23) {
+  const internal = [...new Set(cuts
+    .filter((cut) => Number.isFinite(cut) && cut > 0 && cut < durationMs)
+    .map((cut) => Math.round(cut)))]
+    .sort((a, b) => a - b);
+  if (internal.length <= limit) return [0, ...internal, durationMs];
+  const sampled = Array.from({ length: limit }, (_, index) => internal[Math.round(index * (internal.length - 1) / (limit - 1))]);
+  return [0, ...new Set(sampled), durationMs];
+}
+
 export const DEMO_BOUNDARIES = [0, 2600, 5100, 7200, 9400, 12100, 15100, 17800, 20800];
 
 export function calculateCutRecall(expected: number[], actual: number[], toleranceMs = 500) {

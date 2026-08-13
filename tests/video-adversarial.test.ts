@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { sampleTimelineItems, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../lib/analysis.ts";
+import { sampleAuditCuts, sampleTimelineItems, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../lib/analysis.ts";
 import { demoAnalysis } from "../lib/demo-data.ts";
 import { buildLinkAnalysis, linkAnalysisToMarkdown } from "../lib/link-analysis.ts";
 import { buildResearchQueries } from "../lib/link-research.ts";
@@ -49,6 +49,15 @@ test("timeline compaction preserves the beginning, ending and full-duration dist
   assert.ok(sampled.some((shot) => shot.index >= 59 && shot.index <= 61));
 });
 
+test("local cut auditing stays representable inside a compact long-video report", () => {
+  const cuts = Array.from({ length: 101 }, (_, index) => index * 3_000);
+  const sampled = sampleAuditCuts(cuts, 300_000);
+  assert.equal(sampled.length, 25);
+  assert.equal(sampled[0], 0);
+  assert.equal(sampled.at(-1), 300_000);
+  assert.ok(sampled.some((cut) => cut >= 140_000 && cut <= 160_000));
+});
+
 test("the merged long-video report produces evidence-bound and executable remake work", () => {
   const video = longAnalysis();
   const comments = Array.from({ length: 40 }, (_, index) => ({ id: `c-${index + 1}`, text: index < 30 ? "这个反转让我很有共鸣，想转发" : "节奏有争议但镜头好看" }));
@@ -92,5 +101,6 @@ test("five-minute production transport is asynchronous and accepts a 300MB uploa
   assert.match(studio, /Date\.now\(\) \+ 15 \* 60 \* 1000/);
   assert.match(uploadRoute, /314572800/);
   assert.match(analyzeRoute, /证据记录最多 48 个连续时间段/);
-  assert.match(analyzeRoute, /shots\[\] 最多 48 项/);
+  assert.match(analyzeRoute, /shots\[\] 必须恰好/);
+  assert.match(analyzeRoute, /structure_json_invalid/);
 });

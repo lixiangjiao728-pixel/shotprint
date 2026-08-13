@@ -1,4 +1,4 @@
-import { analysisResultSchema, normalizeAnalysis, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../../../lib/analysis";
+import { analysisResultSchema, normalizeAnalysis, sampleAuditCuts, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../../../lib/analysis";
 import { deleteOssObject, inspectOssObject, normalizeBailianBaseUrl, presignOssUrl, verifyUploadToken } from "../../../lib/aliyun";
 import { reserveAnalysisBudget, settleAnalysisBudget, usageCostMicros, type BailianUsage } from "../../../lib/cost-budget";
 import { getEnv, jsonError } from "../../../lib/server";
@@ -45,6 +45,8 @@ function rawEvidencePrompt(durationMs: number, cuts: number[]) {
 }
 
 function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[], repairIssues?: string[]) {
+  const minimumShotCount = durationMs >= 120_000 ? Math.ceil(durationMs / 60_000) + 1 : 3;
+  const targetShotCount = Math.min(24, Math.max(minimumShotCount, cuts.filter((cut) => cut > 0 && cut < durationMs).length + 1));
   return `你是视听证据结构整理器。只依据下方“原始视听证据”整理 AnalysisResult v1 JSON，不添加原始证据没有的事实。
 
 硬规则：不能从成片确认的内容写 unknown；生产参数只能写带画面或声音证据与 0–1 置信度的推测；不复制角色身份、原台词或作品标识；所有时间用毫秒。metadata.title只有画面或声音明确显示片名时才能填写，否则写unknown。
@@ -55,7 +57,7 @@ function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[]
 
 每个 shot：id,startMs,endMs,transcript,shotSize,camera,motion,action,lighting,palette(十六进制色数组),audio,narrativeFunction,evidence,confidence,localBoundary。
 
-shots[] 最多 48 项；120秒以上至少 ${Math.ceil(durationMs / 60_000) + 1} 项。实际镜头超过48个时，把相邻镜头合并为连续证据段，优先保留本机候选边界附近的差异，但所有段仍须无空洞覆盖0ms到${durationMs}ms。每段 evidence 必须写明该时间范围内可见或可听的变化；重复画面也要如实写持续状态，不能虚构切点或叙事反转。
+shots[] 必须恰好 ${targetShotCount} 项。实际镜头更多时，把相邻镜头合并为连续证据段，优先保留本机候选边界附近的差异，但所有段仍须无空洞覆盖0ms到${durationMs}ms。每段 evidence 必须写明该时间范围内可见或可听的变化；重复画面也要如实写持续状态，不能虚构切点或叙事反转。
 
 narrative：logline,hook,conflict,escalation,reversal,climax,resolution,pace[{label,timeMs,intensity}],stats{averageShotSeconds,fastestShotSeconds,dialogueRatio}。
 
@@ -185,21 +187,24 @@ export async function POST(request: Request) {
     const evidenceCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, model, rawEvidencePrompt(body.durationMs, localCuts), evidenceTokens, videoUrl, false, videoTimeoutMs);
     actualCostMicros += usageCostMicros(evidenceCall.usage, reservation.config);
     const structureModel = runtime.DASHSCOPE_SEARCH_MODEL || "qwen-plus";
-    const structureCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, localCuts), reservation.config.maxOutputTokens, undefined, true, 180_000);
+    const auditCuts = sampleAuditCuts(localCuts, body.durationMs);
+    const structureCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, auditCuts), reservation.config.maxOutputTokens, undefined, true, 180_000);
     actualCostMicros += usageCostMicros(structureCall.usage, reservation.config);
     let candidate: unknown;
-    try { candidate = parseJsonOutput(structureCall.text); } catch { candidate = null; }
-    let validation = validateCandidate(candidate, body.durationMs, localCuts);
+    let parseIssue: string | null = null;
+    try { candidate = parseJsonOutput(structureCall.text); } catch { candidate = null; parseIssue = "structure_json_invalid"; }
+    let validation = parseIssue ? { result: null, issues: [parseIssue] } : validateCandidate(candidate, body.durationMs, auditCuts);
     if (!validation.result) {
       console.warn("Bailian result validation failed; repairing", validation.issues);
-      const repairCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, localCuts, validation.issues), reservation.config.maxOutputTokens, undefined, true, 180_000);
+      const repairCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, auditCuts, validation.issues), reservation.config.maxOutputTokens, undefined, true, 180_000);
       actualCostMicros += usageCostMicros(repairCall.usage, reservation.config);
-      try { candidate = parseJsonOutput(repairCall.text); } catch { candidate = null; }
-      validation = validateCandidate(candidate, body.durationMs, localCuts);
+      parseIssue = null;
+      try { candidate = parseJsonOutput(repairCall.text); } catch { candidate = null; parseIssue = "repair_json_invalid"; }
+      validation = parseIssue ? { result: null, issues: [parseIssue] } : validateCandidate(candidate, body.durationMs, auditCuts);
     }
     if (!validation.result) { failureStage = validation.issues.join(",") || "result_invalid"; throw new Error(failureStage); }
     result = validation.result;
-    result.provenance = { ...result.provenance, model: `${model} → ${structureModel}`, note: `${result.provenance.note}; provider=aliyun-bailian; raw-evidence=omni; structuring=qwen-plus` };
+    result.provenance = { ...result.provenance, model: `${model} → ${structureModel}`, localCutCount: localCuts.filter((cut) => cut > 0 && cut < body.durationMs!).length, note: `${result.provenance.note}; provider=aliyun-bailian; raw-evidence=omni; structuring=qwen-plus; audit-cuts=${auditCuts.length - 2}` };
   } catch (error) {
     if (failureStage === "unknown") failureStage = error instanceof Error ? error.message.slice(0, 160) : "unknown";
     console.warn("Bailian analysis stopped safely", failureStage);
@@ -209,9 +214,13 @@ export async function POST(request: Request) {
   const budgetSettled = await settleAnalysisBudget(runtime, reservation.id, actualCostMicros).catch(() => false);
   const cleaned = await deleteOssObject(runtime, body.objectKey);
   if (analysisFailed || !result) {
-    return jsonError(cleaned
-      ? "模型没有返回结构完整的分析。临时视频已清理，请重试或使用内置样片。"
-      : "分析失败且 OSS 临时视频清理失败。请联系管理员检查对象存储后再重试。", 502);
+    const diagnosticCode = /^[a-z0-9_.:,\-+]+$/i.test(failureStage) ? failureStage.slice(0, 240) : "analysis_provider_error";
+    return Response.json({
+      error: cleaned
+        ? "模型没有返回结构完整的分析。临时视频已清理，请重试或使用内置样片。"
+        : "分析失败且 OSS 临时视频清理失败。请联系管理员检查对象存储后再重试。",
+      diagnosticCode,
+    }, { status: 502, headers: { "cache-control": "no-store" } });
   }
   if (!cleaned) {
     result.warnings = [...result.warnings, "OSS 临时视频自动清理失败；管理员需要立即检查并删除该对象。"];
