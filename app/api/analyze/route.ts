@@ -44,7 +44,7 @@ function rawEvidencePrompt(durationMs: number, cuts: number[]) {
 本机候选切点（毫秒，仅作为复核线索，不得盲从）：${cuts.join(", ")}。证据必须连续覆盖0ms到${durationMs}ms；长视频不能只写开头或用几个泛化长镜头代替逐段观察。每段附0–1置信度。不要猜seed、checkpoint或原提示词。`;
 }
 
-function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[], repairIssues?: string[]) {
+function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[], repairIssues?: string[], previousOutput?: string) {
   const minimumShotCount = durationMs >= 120_000 ? Math.ceil(durationMs / 60_000) + 1 : 3;
   const targetShotCount = Math.min(24, Math.max(minimumShotCount, cuts.filter((cut) => cut > 0 && cut < durationMs).length + 1));
   return `你是视听证据结构整理器。只依据下方“原始视听证据”整理 AnalysisResult v1 JSON，不添加原始证据没有的事实。
@@ -67,6 +67,7 @@ provenance.model 写实际模型名，localCutCount 写 ${cuts.length}，note �
 
 类型硬规则：所有标为字符串的字段只能是 JSON string，无法判断时必须写字符串 "unknown"，绝不能写 null、对象、数组或数字；字符串数组的每一项也只能是字符串。严格仿照下面的键、层级和 JSON 类型，仅替换成视频分析值，不得改名或增加嵌套：
 ${repairIssues?.length ? `上一版结构问题：${repairIssues.join(",")}。只纠正结构和类型，不添加新事实。` : ""}
+${previousOutput ? `上一版待修复 JSON（保留其中已有证据，只修正上述问题）：\n${previousOutput.slice(0, 48_000)}` : ""}
 
 原始视听证据：
 ${rawEvidence.slice(0, 48_000)}
@@ -196,7 +197,7 @@ export async function POST(request: Request) {
     let validation = parseIssue ? { result: null, issues: [parseIssue] } : validateCandidate(candidate, body.durationMs, auditCuts);
     if (!validation.result) {
       console.warn("Bailian result validation failed; repairing", validation.issues);
-      const repairCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, auditCuts, validation.issues), reservation.config.maxOutputTokens, undefined, true, 180_000);
+      const repairCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, auditCuts, validation.issues, structureCall.text), reservation.config.maxOutputTokens, undefined, true, 180_000);
       actualCostMicros += usageCostMicros(repairCall.usage, reservation.config);
       parseIssue = null;
       try { candidate = parseJsonOutput(repairCall.text); } catch { candidate = null; parseIssue = "repair_json_invalid"; }

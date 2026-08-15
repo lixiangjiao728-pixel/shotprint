@@ -30,6 +30,7 @@ type AnalysisJob = {
   createdAt: string;
   expiresAt: string;
   result?: unknown;
+  diagnosticCode?: string;
   userMessage?: string;
 };
 
@@ -48,7 +49,10 @@ async function startAnalysisJob(request: Request) {
       const payload = await response.json().catch(() => ({ error: "分析服务返回了无效结果。" }));
       const status = response.ok && payload && typeof payload === "object" && "result" in payload ? "complete" : "failed";
       const userMessage = status === "failed" && payload && typeof payload === "object" ? String((payload as { error?: string }).error || "视频分析未完成，请重新上传后重试。") : undefined;
-      await runtime.STATE_STORE!.putJson(analysisJobKey(id), { ...base, status, ...(status === "complete" ? { result: payload } : {}), ...(userMessage ? { userMessage } : {}) } satisfies AnalysisJob);
+      const diagnosticCode = status === "failed" && payload && typeof payload === "object"
+        ? String((payload as { diagnosticCode?: string }).diagnosticCode || "analysis_failed").replace(/[^a-z0-9_.:,\-+]/gi, "_").slice(0, 240)
+        : undefined;
+      await runtime.STATE_STORE!.putJson(analysisJobKey(id), { ...base, status, ...(status === "complete" ? { result: payload } : {}), ...(userMessage ? { userMessage } : {}), ...(diagnosticCode ? { diagnosticCode } : {}) } satisfies AnalysisJob);
     } catch {
       await runtime.STATE_STORE!.putJson(analysisJobKey(id), { ...base, status: "failed", userMessage: "视频分析意外中断，请重新上传后重试。" } satisfies AnalysisJob).catch(() => undefined);
     }
@@ -64,7 +68,7 @@ async function readAnalysisJob(id: string) {
     return Response.json({ error: "ANALYSIS_JOB_EXPIRED" }, { status: 404 });
   }
   if (job.status === "complete") return Response.json(job.result, { headers: { "cache-control": "no-store" } });
-  if (job.status === "failed") return Response.json({ error: job.userMessage || "视频分析未完成，请重新上传后重试。" }, { status: 502, headers: { "cache-control": "no-store" } });
+  if (job.status === "failed") return Response.json({ error: job.userMessage || "视频分析未完成，请重新上传后重试。", diagnosticCode: job.diagnosticCode || "analysis_failed" }, { status: 502, headers: { "cache-control": "no-store" } });
   return Response.json({ status: "pending" }, { status: 202, headers: { "cache-control": "no-store" } });
 }
 

@@ -103,4 +103,7 @@ test("five-minute production transport is asynchronous and accepts a 300MB uploa
   assert.match(analyzeRoute, /证据记录最多 48 个连续时间段/);
   assert.match(analyzeRoute, /shots\[\] 必须恰好/);
   assert.match(analyzeRoute, /structure_json_invalid/);
+  assert.match(analyzeRoute, /上一版待修复 JSON/);
+  assert.match(analyzeRoute, /structureCall\.text/);
+  assert.match(server, /diagnosticCode/);
 });
