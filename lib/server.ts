@@ -14,6 +14,7 @@ export interface ShotprintEnv {
   OSS_UPLOAD_PREFIX?: string;
   RATE_LIMIT_SALT?: string;
   DAILY_IP_LIMIT?: string;
+  UPLOAD_DAILY_IP_LIMIT?: string;
   RESEARCH_DAILY_IP_LIMIT?: string;
   DAILY_GLOBAL_LIMIT?: string;
   MAX_VIDEO_BYTES?: string;
@@ -57,13 +58,19 @@ type RateLimitLease = { ipKey: string; globalKey: string; day: string };
 type PortableUsage = { day: string; counts: Record<string, number>; updatedAt: string };
 const PORTABLE_USAGE_KEY = "rate/daily-usage.json";
 
-export async function consumeRateLimit(request: Request, runtime: ShotprintEnv, scope = "") {
+async function rateLimitLease(request: Request, runtime: ShotprintEnv, scope = ""): Promise<RateLimitLease> {
   const day = new Date().toISOString().slice(0, 10);
-  const now = new Date().toISOString();
   const safeScope = scope.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40);
   const prefix = safeScope ? `${safeScope}:` : "";
-  const ipKey = `${prefix}ip:${await hashIp(request, runtime.RATE_LIMIT_SALT || "shotprint-local")}`;
-  const globalKey = `${prefix}global`;
+  return { ipKey: `${prefix}ip:${await hashIp(request, runtime.RATE_LIMIT_SALT || "shotprint-local")}`, globalKey: `${prefix}global`, day };
+}
+
+export async function consumeRateLimit(request: Request, runtime: ShotprintEnv, scope = "") {
+  const lease = await rateLimitLease(request, runtime, scope);
+  const { day, ipKey, globalKey } = lease;
+  const now = new Date().toISOString();
+  const safeScope = scope.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 40);
+  const activity = safeScope.startsWith("link-research") ? "研究" : safeScope.startsWith("video") ? "视频分析" : "分析";
   const ipLimit = Number(runtime.DAILY_IP_LIMIT || 3);
   const globalLimit = Number(runtime.DAILY_GLOBAL_LIMIT || 50);
   if (runtime.STATE_STORE) {
@@ -72,11 +79,11 @@ export async function consumeRateLimit(request: Request, runtime: ShotprintEnv, 
       const current: PortableUsage = raw.day === day ? { day, counts: { ...(raw.counts || {}) }, updatedAt: now } : { day, counts: {}, updatedAt: now };
       const ipCount = Math.max(0, Number(current.counts[ipKey]) || 0);
       const globalCount = Math.max(0, Number(current.counts[globalKey]) || 0);
-      if (ipCount >= ipLimit) { outcome = { ok: false, reason: `当前网络今天的 ${ipLimit} 次成功研究额度已用完。失败研究不会占用额度。`, remaining: 0, lease: null }; return current; }
-      if (globalCount >= globalLimit) { outcome = { ok: false, reason: "今天的公共成功研究额度已用完。失败研究不会占用额度。", remaining: 0, lease: null }; return current; }
+      if (ipCount >= ipLimit) { outcome = { ok: false, reason: `当前网络今天的 ${ipLimit} 次${activity}额度已用完；失败或取消不会占用成功次数。`, remaining: 0, lease: null }; return current; }
+      if (globalCount >= globalLimit) { outcome = { ok: false, reason: `今天的公共${activity}额度已用完；失败或取消不会占用成功次数。`, remaining: 0, lease: null }; return current; }
       current.counts[ipKey] = ipCount + 1;
       current.counts[globalKey] = globalCount + 1;
-      outcome = { ok: true, remaining: ipLimit - ipCount - 1, lease: { ipKey, globalKey, day } };
+      outcome = { ok: true, remaining: ipLimit - ipCount - 1, lease };
       return current;
     });
     return outcome;
@@ -89,13 +96,17 @@ export async function consumeRateLimit(request: Request, runtime: ShotprintEnv, 
   ]);
   const ipCount = ipRow?.day === day ? ipRow.count : 0;
   const globalCount = globalRow?.day === day ? globalRow.count : 0;
-  if (ipCount >= ipLimit) return { ok: false, reason: `当前网络今天的 ${ipLimit} 次成功研究额度已用完。失败研究不会占用额度。`, remaining: 0, lease: null };
-  if (globalCount >= globalLimit) return { ok: false, reason: "今天的公共成功研究额度已用完。失败研究不会占用额度。", remaining: 0, lease: null };
+  if (ipCount >= ipLimit) return { ok: false, reason: `当前网络今天的 ${ipLimit} 次${activity}额度已用完；失败或取消不会占用成功次数。`, remaining: 0, lease: null };
+  if (globalCount >= globalLimit) return { ok: false, reason: `今天的公共${activity}额度已用完；失败或取消不会占用成功次数。`, remaining: 0, lease: null };
   await runtime.DB.batch([
     runtime.DB.prepare("INSERT INTO daily_usage (key, day, count, updated_at) VALUES (?, ?, 1, ?) ON CONFLICT(key) DO UPDATE SET day = excluded.day, count = CASE WHEN daily_usage.day = excluded.day THEN daily_usage.count + 1 ELSE 1 END, updated_at = excluded.updated_at").bind(ipKey, day, now),
     runtime.DB.prepare("INSERT INTO daily_usage (key, day, count, updated_at) VALUES (?, ?, 1, ?) ON CONFLICT(key) DO UPDATE SET day = excluded.day, count = CASE WHEN daily_usage.day = excluded.day THEN daily_usage.count + 1 ELSE 1 END, updated_at = excluded.updated_at").bind(globalKey, day, now),
   ]);
-  return { ok: true, remaining: ipLimit - ipCount - 1, lease: { ipKey, globalKey, day } satisfies RateLimitLease };
+  return { ok: true, remaining: ipLimit - ipCount - 1, lease };
+}
+
+export async function releaseRateLimitForRequest(request: Request, runtime: ShotprintEnv, scope = "") {
+  await releaseRateLimit(runtime, await rateLimitLease(request, runtime, scope));
 }
 
 export async function releaseRateLimit(runtime: ShotprintEnv, lease: RateLimitLease | null | undefined) {

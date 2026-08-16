@@ -1,6 +1,6 @@
 import { createObjectKey, createUploadToken, deleteOssObject, presignOssUrl, verifyUploadToken } from "../../../lib/aliyun";
-import { getBudgetStatus } from "../../../lib/cost-budget";
-import { consumeRateLimit, getEnv, jsonError, releaseRateLimit } from "../../../lib/server";
+import { getBudgetStatus, VIDEO_ANALYSIS_BUDGET } from "../../../lib/cost-budget";
+import { consumeRateLimit, getEnv, jsonError, releaseRateLimit, releaseRateLimitForRequest } from "../../../lib/server";
 
 export const dynamic = "force-dynamic";
 
@@ -21,12 +21,13 @@ export async function POST(request: Request) {
   if (typeof body.size !== "number" || !Number.isSafeInteger(body.size) || body.size <= 0 || body.size > maxBytes) return jsonError("视频大小无效或超过当前 300MB 上限。", 413);
   if (typeof body.durationMs !== "number" || !Number.isFinite(body.durationMs) || body.durationMs <= 0 || body.durationMs > maxDuration) return jsonError("视频时长无效或超过当前 300 秒上限。", 413);
   try {
-    const budget = await getBudgetStatus(runtime);
+    const budget = await getBudgetStatus(runtime, VIDEO_ANALYSIS_BUDGET);
     if (!budget.ok) return jsonError(budget.reason, 402);
   } catch {
     return jsonError("费用保护暂时无法确认余额，真实分析已安全暂停；内置样片仍可使用。", 503);
   }
-  const limit = await consumeRateLimit(request, runtime);
+  const uploadRuntime = { ...runtime, DAILY_IP_LIMIT: runtime.UPLOAD_DAILY_IP_LIMIT || "12" };
+  const limit = await consumeRateLimit(request, uploadRuntime, "video-upload");
   if (!limit.ok) return jsonError(limit.reason || "今日试用额度已用完。", 429);
   try {
     const objectKey = createObjectKey(body.mimeType, runtime.OSS_UPLOAD_PREFIX);
@@ -56,5 +57,6 @@ export async function DELETE(request: Request) {
   const claims = await verifyUploadToken(runtime, body.uploadToken);
   if (!claims || claims.objectKey !== body.objectKey) return jsonError("临时视频清理凭证无效或已过期。", 400);
   const cleaned = await deleteOssObject(runtime, body.objectKey);
+  if (cleaned) await releaseRateLimitForRequest(request, runtime, "video-upload").catch(() => undefined);
   return cleaned ? Response.json({ cleaned: true }, { headers: { "cache-control": "no-store" } }) : jsonError("OSS 临时视频清理失败，请联系管理员。", 502);
 }

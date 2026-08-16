@@ -99,11 +99,15 @@ test("five-minute production transport is asynchronous and accepts a 300MB uploa
   assert.match(server, /analysisJobMatch = path\.match/);
   assert.match(studio, /\/api\/analyze\/jobs\/\$\{encodeURIComponent\(accepted\.analysisJobId\)\}/);
   assert.match(studio, /Date\.now\(\) \+ 15 \* 60 \* 1000/);
+  assert.match(studio, /analysisRunRef\.current/);
+  assert.match(studio, /finally \{\s*if \(analysisRunRef\.current === runId\) analysisRunRef\.current = null/);
   assert.match(uploadRoute, /314572800/);
   assert.match(analyzeRoute, /证据记录最多 48 个连续时间段/);
   assert.match(analyzeRoute, /shots\[\] 必须恰好/);
   assert.match(analyzeRoute, /structure_json_invalid/);
   assert.match(analyzeRoute, /上一版待修复 JSON/);
   assert.match(analyzeRoute, /structureCall\.text/);
+  assert.match(analyzeRoute, /accountModelCall/);
+  assert.doesNotMatch(analyzeRoute, /actualCostMicros = reservation\.reservedMicros/);
   assert.match(server, /diagnosticCode/);
 });

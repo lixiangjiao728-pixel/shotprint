@@ -5,6 +5,8 @@ const MICROS_PER_CNY = 1_000_000;
 const MAX_MODEL_CALLS_PER_ANALYSIS = 2;
 const OSS_BUDGET_KEY = "budget/shotprint-analysis.json";
 
+export const VIDEO_ANALYSIS_BUDGET = { maxModelCalls: 3 } as const;
+
 type PortableReservation = { reservedMicros: number; createdAt: string; settled: boolean; actualMicros?: number };
 type PortableBudget = { spentMicros: number; limitMicros: number; reservations: Record<string, PortableReservation>; updatedAt: string };
 
@@ -154,7 +156,7 @@ export async function getBudgetStatus(runtime: ShotprintEnv, options: BudgetOpti
     const spentMicros = row.spentMicros;
     const reservedMicros = portableReserved(row);
     const availableMicros = config.limitMicros - spentMicros - reservedMicros;
-    if (availableMicros < config.reservationMicros) return { ok: false, reason: `本项目的 ${Math.round(config.limitMicros / MICROS_PER_CNY)} 元分析预算已用完，或余额不足以安全预留下一次分析。内置样片仍可使用。`, limitMicros: config.limitMicros, spentMicros, reservedMicros };
+    if (availableMicros < config.reservationMicros) return { ok: false, reason: "当前分析额度已用完，或不足以安全开始下一次完整分析。内置样片仍可使用。", limitMicros: config.limitMicros, spentMicros, reservedMicros };
     return { ok: true, availableMicros, config };
   }
   await ensureBudget(runtime, config);
@@ -163,7 +165,7 @@ export async function getBudgetStatus(runtime: ShotprintEnv, options: BudgetOpti
   const reservedMicros = Number(row?.reserved_micros || 0);
   const availableMicros = config.limitMicros - spentMicros - reservedMicros;
   if (availableMicros < config.reservationMicros) {
-    return { ok: false, reason: `本项目的 ${Math.round(config.limitMicros / MICROS_PER_CNY)} 元分析预算已用完，或余额不足以安全预留下一次分析。内置样片仍可使用。`, limitMicros: config.limitMicros, spentMicros, reservedMicros };
+    return { ok: false, reason: "当前分析额度已用完，或不足以安全开始下一次完整分析。内置样片仍可使用。", limitMicros: config.limitMicros, spentMicros, reservedMicros };
   }
   return { ok: true, availableMicros, config };
 }
@@ -178,7 +180,7 @@ export async function reserveAnalysisBudget(runtime: ShotprintEnv, options: Budg
       const current = cleanPortableBudget(raw, config);
       const reservedMicros = portableReserved(current);
       if (current.spentMicros + reservedMicros + config.reservationMicros > config.limitMicros) {
-        rejection = { ok: false, reason: `本项目的 ${Math.round(config.limitMicros / MICROS_PER_CNY)} 元分析预算刚刚被其他请求预留。内置样片仍可使用。`, limitMicros: config.limitMicros, spentMicros: current.spentMicros, reservedMicros };
+        rejection = { ok: false, reason: "另一项分析刚刚占用了可用额度。请等待正在运行的任务完成后重试；内置样片仍可使用。", limitMicros: config.limitMicros, spentMicros: current.spentMicros, reservedMicros };
         return current;
       }
       current.reservations[id] = { reservedMicros: config.reservationMicros, createdAt: now, settled: false };
@@ -196,7 +198,7 @@ export async function reserveAnalysisBudget(runtime: ShotprintEnv, options: Budg
     const row = await budgetRow(runtime);
     return {
       ok: false,
-      reason: `本项目的 ${Math.round(status.config.limitMicros / MICROS_PER_CNY)} 元分析预算刚刚被其他请求预留。内置样片仍可使用。`,
+      reason: "另一项分析刚刚占用了可用额度。请等待正在运行的任务完成后重试；内置样片仍可使用。",
       limitMicros: status.config.limitMicros,
       spentMicros: Number(row?.spent_micros || 0),
       reservedMicros: Number(row?.reserved_micros || 0),

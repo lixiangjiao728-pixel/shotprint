@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
-import { costConfig, getBudgetStatus, reserveAnalysisBudget, settleAnalysisBudget, usageCostMicros } from "../lib/cost-budget.ts";
+import { costConfig, getBudgetStatus, reserveAnalysisBudget, settleAnalysisBudget, usageCostMicros, VIDEO_ANALYSIS_BUDGET } from "../lib/cost-budget.ts";
 import type { ShotprintEnv } from "../lib/server.ts";
 
 class SqliteStatementAdapter {
@@ -71,6 +71,12 @@ test("budget fails closed without a persistent D1 binding", async () => {
   if (!status.ok) assert.match(status.reason, /安全暂停|费用保护/);
 });
 
+test("video upload preflight reserves the same three-call ceiling as analysis", () => {
+  const config = costConfig(runtime(), VIDEO_ANALYSIS_BUDGET);
+  assert.equal(config.maxModelCalls, 3);
+  assert.equal(config.reservationMicros, config.fixedMicrosPerAnalysis + config.maxMicrosPerCall * 3);
+});
+
 test("settled spend at the CNY 10 cap stops all future analysis", async () => {
   const env = runtime();
   const reservation = await reserveAnalysisBudget(env);
@@ -79,5 +85,5 @@ test("settled spend at the CNY 10 cap stops all future analysis", async () => {
   await settleAnalysisBudget(env, reservation.id, 10_000_000);
   const status = await getBudgetStatus(env);
   assert.equal(status.ok, false);
-  if (!status.ok) assert.match(status.reason, /10 元分析预算/);
+  if (!status.ok) assert.match(status.reason, /当前分析额度已用完/);
 });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import test from "node:test";
-import { consumeRateLimit, releaseRateLimit, type ShotprintEnv } from "../lib/server.ts";
+import { consumeRateLimit, releaseRateLimit, releaseRateLimitForRequest, type ShotprintEnv } from "../lib/server.ts";
 
 class StatementAdapter {
   private values: SQLInputValue[] = [];
@@ -49,4 +49,14 @@ test("successful research retains quota and a new scope starts clean", async () 
   assert.equal(blocked.ok, false);
   const migrated = await consumeRateLimit(request(), env, "link-research-v2");
   assert.equal(migrated.ok, true);
+});
+
+test("a cancelled video upload releases the matching request quota", async () => {
+  const env = runtime();
+  const uploadRequest = request();
+  const first = await consumeRateLimit(uploadRequest, env, "video-upload");
+  assert.equal(first.ok, true);
+  assert.equal((await consumeRateLimit(request(), env, "video-upload")).ok, false);
+  await releaseRateLimitForRequest(uploadRequest, env, "video-upload");
+  assert.equal((await consumeRateLimit(request(), env, "video-upload")).ok, true);
 });

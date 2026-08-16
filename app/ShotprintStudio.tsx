@@ -192,6 +192,7 @@ export default function ShotprintStudio() {
   const collectionRetryRef = useRef(0);
   const terminalReceiptsRef = useRef(new Set<string>());
   const autoAnalyzeRef = useRef(false);
+  const analysisRunRef = useRef<string | null>(null);
 
   const duration = analysis?.metadata.durationMs ?? 20800;
   const currentShot = analysis?.shots[activeShot];
@@ -317,6 +318,7 @@ export default function ShotprintStudio() {
     if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     autoAnalyzeRef.current = false;
+    analysisRunRef.current = null;
     setPhase("idle"); setProgress(0); setError(""); setFile(null); setVideoUrl(""); setAnalysis(null); setPlayhead(0); setPlaying(false); setIsDemo(false); setLink(""); setLinkPlatform("unknown"); setLinkPhase("idle"); setLinkStage(0); setLinkError(""); setManualComments(""); setLinkAnalysis(null); setPendingLinkPayload(null); setLinkFixture(false); setBridgeDiagnostics(null); setDiagnosticCopied(false); setResearchSessionId(""); setResearchProgress({ completedQueries: 0, totalQueries: 8, sourceCount: 0, domainCount: 0 }); setFileAcquisition("manual_upload"); setFileAudioPresent(null); setRecordingSeconds(0); setRecordingBytes(0); setRecordingPaused(false); setCaptureWarning(""); setPairingCode(""); setPairingStatus("idle"); setVideoPageEvidence(null);
   }, [videoUrl]);
 
@@ -538,7 +540,9 @@ export default function ShotprintStudio() {
   };
 
   async function runAnalysis(targetFile = file, targetVideoUrl = videoUrl, targetAcquisition = fileAcquisition, targetAudioPresent = fileAudioPresent, targetConsent = consent) {
-    if (!targetFile || !targetVideoUrl || !targetConsent) return;
+    if (!targetFile || !targetVideoUrl || !targetConsent || analysisRunRef.current) return;
+    const runId = crypto.randomUUID();
+    analysisRunRef.current = runId;
     autoAnalyzeRef.current = false;
     const controller = new AbortController(); abortRef.current = controller;
     let activeUpload: { objectKey: string; uploadToken: string } | null = null;
@@ -623,6 +627,8 @@ export default function ShotprintStudio() {
       if (activeUpload) void fetch(apiUrl("/api/upload-session"), { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(activeUpload), keepalive: true });
       if (caught instanceof DOMException && caught.name === "AbortError") { setPhase("idle"); setProgress(0); return; }
       setError(caught instanceof Error ? caught.message : "分析意外中断，请重试。"); setPhase("error");
+    } finally {
+      if (analysisRunRef.current === runId) analysisRunRef.current = null;
     }
   }
 

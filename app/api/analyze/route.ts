@@ -1,7 +1,7 @@
 import { analysisResultSchema, normalizeAnalysis, sampleAuditCuts, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../../../lib/analysis";
 import { deleteOssObject, inspectOssObject, normalizeBailianBaseUrl, presignOssUrl, verifyUploadToken } from "../../../lib/aliyun";
-import { reserveAnalysisBudget, settleAnalysisBudget, usageCostMicros, type BailianUsage } from "../../../lib/cost-budget";
-import { getEnv, jsonError } from "../../../lib/server";
+import { reserveAnalysisBudget, settleAnalysisBudget, usageCostMicros, VIDEO_ANALYSIS_BUDGET, type BailianUsage } from "../../../lib/cost-budget";
+import { consumeRateLimit, getEnv, jsonError, releaseRateLimit, releaseRateLimitForRequest } from "../../../lib/server";
 
 export const dynamic = "force-dynamic";
 
@@ -161,60 +161,84 @@ export async function POST(request: Request) {
     const cleaned = await deleteOssObject(runtime, body.objectKey);
     return jsonError(cleaned ? "已上传的视频与上传凭证不一致，临时文件已清理，请重新上传。" : "已上传的视频与上传凭证不一致，且临时文件清理失败，请联系管理员。", 400);
   }
+  await releaseRateLimitForRequest(request, runtime, "video-upload").catch(() => undefined);
+  let analysisLimit: Awaited<ReturnType<typeof consumeRateLimit>>;
+  try {
+    analysisLimit = await consumeRateLimit(request, runtime, "video-analysis");
+  } catch {
+    const cleaned = await deleteOssObject(runtime, body.objectKey);
+    return jsonError(cleaned ? "暂时无法确认视频分析次数，临时文件已清理，请稍后重试。" : "视频分析次数不可用且临时文件清理失败，请联系管理员。", 503);
+  }
+  if (!analysisLimit.ok) {
+    const cleaned = await deleteOssObject(runtime, body.objectKey);
+    return jsonError(cleaned ? analysisLimit.reason || "今天的视频分析次数已用完。" : `${analysisLimit.reason || "今天的视频分析次数已用完。"} OSS 临时视频清理失败，请联系管理员。`, 429);
+  }
   let reservation: Awaited<ReturnType<typeof reserveAnalysisBudget>>;
   try {
-    reservation = await reserveAnalysisBudget(runtime, { maxModelCalls: 3 });
+    reservation = await reserveAnalysisBudget(runtime, VIDEO_ANALYSIS_BUDGET);
   } catch {
+    await releaseRateLimit(runtime, analysisLimit.lease).catch(() => undefined);
     const cleaned = await deleteOssObject(runtime, body.objectKey);
     return jsonError(cleaned
       ? "费用保护暂时无法预留额度，真实分析已安全暂停；临时视频已清理。"
       : "费用保护不可用且 OSS 临时视频清理失败，请联系管理员。", 503);
   }
   if (!reservation.ok) {
+    await releaseRateLimit(runtime, analysisLimit.lease).catch(() => undefined);
     const cleaned = await deleteOssObject(runtime, body.objectKey);
     return jsonError(cleaned ? reservation.reason : `${reservation.reason} OSS 临时视频清理失败，请联系管理员。`, 402);
   }
-  const localCuts = Array.isArray(body.localCuts) ? body.localCuts.filter((value) => Number.isFinite(value) && value >= 0 && value <= body.durationMs!).slice(0, 600) : [];
+  const budget = reservation;
+  const apiKey = runtime.DASHSCOPE_API_KEY;
+  const durationMs = body.durationMs;
+  const localCuts = Array.isArray(body.localCuts) ? body.localCuts.filter((value) => Number.isFinite(value) && value >= 0 && value <= durationMs).slice(0, 600) : [];
   const model = runtime.DASHSCOPE_MODEL || "qwen3.5-omni-plus";
   let result: AnalysisResult | null = null;
   let analysisFailed = false;
   let failureStage = "unknown";
-  let actualCostMicros = reservation.config.fixedMicrosPerAnalysis;
+  let actualCostMicros = budget.config.fixedMicrosPerAnalysis;
+  async function accountModelCall<T extends { usage?: BailianUsage | null }>(call: () => Promise<T>) {
+    try {
+      const response = await call();
+      actualCostMicros += usageCostMicros(response.usage, budget.config);
+      return response;
+    } catch (error) {
+      actualCostMicros += budget.config.maxMicrosPerCall;
+      throw error;
+    }
+  }
   try {
     const baseUrl = normalizeBailianBaseUrl(runtime.DASHSCOPE_BASE_URL);
     const videoUrl = await presignOssUrl(runtime, "GET", body.objectKey, { ttlSeconds: 1200 });
-    const videoTimeoutMs = Math.min(600_000, Math.max(240_000, body.durationMs * 2));
-    const evidenceTokens = Math.min(body.durationMs >= 180_000 ? 12_000 : 8_000, reservation.config.maxOutputTokens);
-    const evidenceCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, model, rawEvidencePrompt(body.durationMs, localCuts), evidenceTokens, videoUrl, false, videoTimeoutMs);
-    actualCostMicros += usageCostMicros(evidenceCall.usage, reservation.config);
+    const videoTimeoutMs = Math.min(600_000, Math.max(240_000, durationMs * 2));
+    const evidenceTokens = Math.min(durationMs >= 180_000 ? 12_000 : 8_000, budget.config.maxOutputTokens);
+    const evidenceCall = await accountModelCall(() => callBailian(apiKey, baseUrl, model, rawEvidencePrompt(durationMs, localCuts), evidenceTokens, videoUrl, false, videoTimeoutMs));
     const structureModel = runtime.DASHSCOPE_SEARCH_MODEL || "qwen-plus";
-    const auditCuts = sampleAuditCuts(localCuts, body.durationMs);
-    const structureCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, auditCuts), reservation.config.maxOutputTokens, undefined, true, 180_000);
-    actualCostMicros += usageCostMicros(structureCall.usage, reservation.config);
+    const auditCuts = sampleAuditCuts(localCuts, durationMs);
+    const structureCall = await accountModelCall(() => callBailian(apiKey, baseUrl, structureModel, structurePrompt(evidenceCall.text, durationMs, auditCuts), budget.config.maxOutputTokens, undefined, true, 180_000));
     let candidate: unknown;
     let parseIssue: string | null = null;
     try { candidate = parseJsonOutput(structureCall.text); } catch { candidate = null; parseIssue = "structure_json_invalid"; }
-    let validation = parseIssue ? { result: null, issues: [parseIssue] } : validateCandidate(candidate, body.durationMs, auditCuts);
+    let validation = parseIssue ? { result: null, issues: [parseIssue] } : validateCandidate(candidate, durationMs, auditCuts);
     if (!validation.result) {
       console.warn("Bailian result validation failed; repairing", validation.issues);
-      const repairCall = await callBailian(runtime.DASHSCOPE_API_KEY, baseUrl, structureModel, structurePrompt(evidenceCall.text, body.durationMs, auditCuts, validation.issues, structureCall.text), reservation.config.maxOutputTokens, undefined, true, 180_000);
-      actualCostMicros += usageCostMicros(repairCall.usage, reservation.config);
+      const repairCall = await accountModelCall(() => callBailian(apiKey, baseUrl, structureModel, structurePrompt(evidenceCall.text, durationMs, auditCuts, validation.issues, structureCall.text), budget.config.maxOutputTokens, undefined, true, 180_000));
       parseIssue = null;
       try { candidate = parseJsonOutput(repairCall.text); } catch { candidate = null; parseIssue = "repair_json_invalid"; }
-      validation = parseIssue ? { result: null, issues: [parseIssue] } : validateCandidate(candidate, body.durationMs, auditCuts);
+      validation = parseIssue ? { result: null, issues: [parseIssue] } : validateCandidate(candidate, durationMs, auditCuts);
     }
     if (!validation.result) { failureStage = validation.issues.join(",") || "result_invalid"; throw new Error(failureStage); }
     result = validation.result;
-    result.provenance = { ...result.provenance, model: `${model} → ${structureModel}`, localCutCount: localCuts.filter((cut) => cut > 0 && cut < body.durationMs!).length, note: `${result.provenance.note}; provider=aliyun-bailian; raw-evidence=omni; structuring=qwen-plus; audit-cuts=${auditCuts.length - 2}` };
+    result.provenance = { ...result.provenance, model: `${model} → ${structureModel}`, localCutCount: localCuts.filter((cut) => cut > 0 && cut < durationMs).length, note: `${result.provenance.note}; provider=aliyun-bailian; raw-evidence=omni; structuring=qwen-plus; audit-cuts=${auditCuts.length - 2}` };
   } catch (error) {
     if (failureStage === "unknown") failureStage = error instanceof Error ? error.message.slice(0, 160) : "unknown";
     console.warn("Bailian analysis stopped safely", failureStage);
     analysisFailed = true;
-    actualCostMicros = reservation.reservedMicros;
   }
-  const budgetSettled = await settleAnalysisBudget(runtime, reservation.id, actualCostMicros).catch(() => false);
+  const budgetSettled = await settleAnalysisBudget(runtime, budget.id, actualCostMicros).catch(() => false);
   const cleaned = await deleteOssObject(runtime, body.objectKey);
   if (analysisFailed || !result) {
+    await releaseRateLimit(runtime, analysisLimit.lease).catch(() => undefined);
     const diagnosticCode = /^[a-z0-9_.:,\-+]+$/i.test(failureStage) ? failureStage.slice(0, 240) : "analysis_provider_error";
     return Response.json({
       error: cleaned

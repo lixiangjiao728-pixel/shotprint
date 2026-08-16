@@ -27,3 +27,23 @@ test("analysis verifies the uploaded object before reserving model budget", asyn
   assert.match(source, /uploaded\.mimeType !== claims\.mimeType/);
   assert.match(source, /\.slice\(0, 600\)/);
 });
+
+test("upload preflight and analysis share one full-video budget definition", async () => {
+  const [uploadSource, analyzeSource] = await Promise.all([
+    readFile(new URL("../app/api/upload-session/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(uploadSource, /getBudgetStatus\(runtime, VIDEO_ANALYSIS_BUDGET\)/);
+  assert.match(analyzeSource, /reserveAnalysisBudget\(runtime, VIDEO_ANALYSIS_BUDGET\)/);
+});
+
+test("video upload attempts and successful analyses use separate releasable quotas", async () => {
+  const [uploadSource, analyzeSource] = await Promise.all([
+    readFile(new URL("../app/api/upload-session/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
+  ]);
+  assert.match(uploadSource, /consumeRateLimit\(request, uploadRuntime, "video-upload"\)/);
+  assert.match(uploadSource, /releaseRateLimitForRequest\(request, runtime, "video-upload"\)/);
+  assert.match(analyzeSource, /consumeRateLimit\(request, runtime, "video-analysis"\)/);
+  assert.match(analyzeSource, /releaseRateLimit\(runtime, analysisLimit\.lease\)/);
+});
