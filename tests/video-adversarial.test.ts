@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { analysisResultSchema, sampleAuditCuts, sampleTimelineItems, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../lib/analysis.ts";
+import { analysisResultSchema, normalizeAnalysis, sampleAuditCuts, sampleTimelineItems, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../lib/analysis.ts";
 import { demoAnalysis } from "../lib/demo-data.ts";
 import { buildLinkAnalysis, linkAnalysisToMarkdown } from "../lib/link-analysis.ts";
 import { buildResearchQueries } from "../lib/link-research.ts";
@@ -38,6 +38,40 @@ test("an unknown visual palette does not invalidate otherwise complete evidence"
   result.shots[4].palette = [];
   assert.equal(analysisResultSchema.safeParse(result).success, true);
   assert.equal(validateEvidenceCoverage(result, 300_000), null);
+});
+
+test("deterministic normalization closes model timecodes and distributes narrative coverage", () => {
+  const result = longAnalysis();
+  result.shots[0].startMs = 320;
+  result.shots[2].endMs = result.shots[2].startMs;
+  result.shots.at(-1)!.endMs = 340_000;
+  result.narrative.pace = [
+    { label: "变化一", timeMs: 120_000, intensity: 30 },
+    { label: "变化二", timeMs: 150_000, intensity: 70 },
+    { label: "变化三", timeMs: 180_000, intensity: 90 },
+  ];
+  const normalized = normalizeAnalysis(result, [0, 50_000, 100_000, 150_000, 200_000, 250_000, 300_000], 300_000);
+  assert.equal(normalized.shots[0].startMs, 0);
+  assert.equal(normalized.shots.at(-1)!.endMs, 300_000);
+  assert.equal(normalized.shots[2].endMs, normalized.shots[3].startMs);
+  assert.equal(validateEvidenceCoverage(normalized, 300_000, [0, 50_000, 100_000, 150_000, 200_000, 250_000, 300_000]), null);
+});
+
+test("non-operational model remake copy is rebuilt from validated shot evidence", () => {
+  const result = longAnalysis();
+  result.reusableTemplate = {
+    storyVariables: ["主题"],
+    beatSheet: ["保持节奏"],
+    globalVisualRules: ["画面好看"],
+    shotPrompts: ["有氛围"],
+    negativeConstraints: ["不要出错"],
+    editAndSound: ["声音合适"],
+  };
+  const normalized = normalizeAnalysis(result, [], 300_000);
+  assert.equal(validateActionability(normalized), null);
+  assert.ok(normalized.reusableTemplate.beatSheet.every((item) => /%.*秒/.test(item)));
+  assert.ok(normalized.reusableTemplate.shotPrompts.every((item) => /原创主体.*景.*秒.*声音|原创主体.*景.*秒.*音效|原创主体.*景.*秒.*音乐/.test(item)));
+  assert.ok(normalized.reusableTemplate.negativeConstraints.every((item) => /不/.test(item)));
 });
 
 test("adversarial long-video outputs cannot pass with sparse evidence, missed cuts, or generic execution copy", () => {

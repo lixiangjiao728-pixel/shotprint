@@ -595,9 +595,12 @@ export default function ShotprintStudio() {
         }
         if (response.status === 202) throw new Error("300秒视频分析超过15分钟仍未完成；后台会继续清理临时文件，请稍后重试。");
       }
-      const payload = await readSafeApiJson<{ result?: unknown; error?: string }>(response, "分析服务没有返回完整结果");
+      const payload = await readSafeApiJson<{ result?: unknown; error?: string; diagnosticCode?: string }>(response, "分析服务没有返回完整结果");
       activeUpload = null;
-      if (!response.ok || !payload.result) throw new Error(payload.error || "模型没有返回可用结果。");
+      if (!response.ok || !payload.result) {
+        const diagnostic = payload.diagnosticCode ? `（诊断码：${payload.diagnosticCode}）` : "";
+        throw new Error(`${payload.error || "模型没有返回可用结果。"}${diagnostic}`);
+      }
       const parsed = analysisResultSchema.parse(payload.result);
       setAnalysis(parsed); setPhase("ready"); setProgress(100); setIsDemo(false); setTab("shots");
       if (pendingLinkPayload) {

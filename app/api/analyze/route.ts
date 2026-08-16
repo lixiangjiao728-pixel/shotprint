@@ -131,7 +131,7 @@ async function callBailian(key: string, baseUrl: string, model: string, prompt: 
 function validateCandidate(candidate: unknown, durationMs: number, localCuts: number[]) {
   const parsed = analysisResultSchema.safeParse(candidate);
   if (!parsed.success) return { result: null, issues: parsed.error.issues.slice(0, 12).map((issue) => `${issue.path.join(".")}:${issue.code}`) };
-  const result = normalizeAnalysis(parsed.data, localCuts);
+  const result = normalizeAnalysis(parsed.data, localCuts, durationMs);
   const evidenceIssue = validateEvidenceCoverage(result, durationMs, localCuts);
   const actionabilityIssue = validateActionability(result);
   const issues = [evidenceIssue, actionabilityIssue].filter((issue): issue is string => Boolean(issue));
