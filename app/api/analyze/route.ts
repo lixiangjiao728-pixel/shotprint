@@ -10,7 +10,7 @@ const OUTPUT_EXAMPLE = JSON.stringify({
   metadata: { title: "unknown", durationMs: 5000, aspectRatio: "9:16", language: "unknown", analyzedAt: "2026-01-01T00:00:00.000Z" },
   shots: [{
     id: "shot-01", startMs: 0, endMs: 5000, transcript: "unknown", shotSize: "unknown", camera: "unknown",
-    motion: "unknown", action: "unknown", lighting: "unknown", palette: ["#000000"], audio: "unknown",
+    motion: "unknown", action: "unknown", lighting: "unknown", palette: [], audio: "unknown",
     narrativeFunction: "unknown", evidence: "unknown", confidence: 0, localBoundary: false,
   }],
   narrative: {
@@ -55,7 +55,7 @@ function structurePrompt(rawEvidence: string, durationMs: number, cuts: number[]
 
 顶层字段：version 固定 1.0；metadata(title,durationMs,aspectRatio,language,analyzedAt)；shots[]；narrative；productionHypotheses[]；reusableTemplate；warnings[]；provenance。
 
-每个 shot：id,startMs,endMs,transcript,shotSize,camera,motion,action,lighting,palette(十六进制色数组),audio,narrativeFunction,evidence,confidence,localBoundary。
+每个 shot：id,startMs,endMs,transcript,shotSize,camera,motion,action,lighting,palette(十六进制色数组；无法可靠判断时写空数组),audio,narrativeFunction,evidence,confidence,localBoundary。
 
 shots[] 必须恰好 ${targetShotCount} 项。实际镜头更多时，把相邻镜头合并为连续证据段，优先保留本机候选边界附近的差异，但所有段仍须无空洞覆盖0ms到${durationMs}ms。每段 evidence 必须写明该时间范围内可见或可听的变化；重复画面也要如实写持续状态，不能虚构切点或叙事反转。
 

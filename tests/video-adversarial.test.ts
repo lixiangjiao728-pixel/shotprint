@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { sampleAuditCuts, sampleTimelineItems, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../lib/analysis.ts";
+import { analysisResultSchema, sampleAuditCuts, sampleTimelineItems, validateActionability, validateEvidenceCoverage, type AnalysisResult } from "../lib/analysis.ts";
 import { demoAnalysis } from "../lib/demo-data.ts";
 import { buildLinkAnalysis, linkAnalysisToMarkdown } from "../lib/link-analysis.ts";
 import { buildResearchQueries } from "../lib/link-research.ts";
@@ -31,6 +31,13 @@ test("a fully covered 300-second analysis passes evidence and actionability gate
   const result = longAnalysis();
   assert.equal(validateEvidenceCoverage(result, 300_000, [0, 50_000, 100_000, 150_000, 200_000, 250_000, 300_000]), null);
   assert.equal(validateActionability(result), null);
+});
+
+test("an unknown visual palette does not invalidate otherwise complete evidence", () => {
+  const result = longAnalysis();
+  result.shots[4].palette = [];
+  assert.equal(analysisResultSchema.safeParse(result).success, true);
+  assert.equal(validateEvidenceCoverage(result, 300_000), null);
 });
 
 test("adversarial long-video outputs cannot pass with sparse evidence, missed cuts, or generic execution copy", () => {

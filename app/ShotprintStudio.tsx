@@ -33,6 +33,11 @@ const COLLECTION_LOAD_WATCHDOG_MS = 55000;
 const COLLECTION_STALL_WATCHDOG_MS = 18000;
 const LINK_STAGES = ["评论采集", "评论续采", "深度检索", "交叉核验", "视听分析", "综合报告"] as const;
 
+function displayPalette(palette?: string[]) {
+  if (!palette?.length) return ["#101218", "#A8C7C0"];
+  return [palette[0], palette[1] ?? palette[0]];
+}
+
 function linkStageStatus(index: number, phase: LinkPhase, activeStage: number, recognized: boolean) {
   if (phase === "ready") return "done";
   if (phase === "idle") return recognized && index === 0 ? "done" : "pending";
@@ -656,7 +661,7 @@ export default function ShotprintStudio() {
   ];
 
   const demoFrame = useMemo(() => {
-    const palettes = currentShot?.palette ?? ["#101218", "#A8C7C0"];
+    const palettes = displayPalette(currentShot?.palette);
     return { background: `radial-gradient(circle at ${32 + activeShot * 5}% ${28 + activeShot * 3}%, ${palettes[1]} 0, transparent 22%), linear-gradient(${110 + activeShot * 7}deg, ${palettes[0]}, #11131a 68%)` };
   }, [activeShot, currentShot]);
 
@@ -760,12 +765,12 @@ export default function ShotprintStudio() {
           <aside className="shot-inspector"><span className="mono">CURRENT SHOT</span><b>{String(activeShot + 1).padStart(2, "0")}</b><h3>{currentShot?.narrativeFunction}</h3><p>{currentShot?.action}</p><dl><div><dt>景别</dt><dd>{currentShot?.shotSize}</dd></div><div><dt>运动</dt><dd>{currentShot?.motion}</dd></div><div><dt>判断</dt><dd>{Math.round((currentShot?.confidence || 0) * 100)}%</dd></div></dl><span className={`boundary ${currentShot?.localBoundary ? "matched" : ""}`}>{currentShot?.localBoundary ? "● 本机切点吻合" : "○ 仅模型判断"}</span></aside>
         </div>
 
-        <div className="timeline" aria-label="镜头时间轴">{analysis.shots.map((shot, index) => <button key={shot.id} className={index === activeShot ? "active" : ""} style={{ flexGrow: shot.endMs - shot.startMs }} onClick={() => seek(index)}><span>{String(index + 1).padStart(2, "0")}</span><i style={{ background: `linear-gradient(135deg, ${shot.palette.join(",")})` }} /></button>)}</div>
+        <div className="timeline" aria-label="镜头时间轴">{analysis.shots.map((shot, index) => <button key={shot.id} className={index === activeShot ? "active" : ""} style={{ flexGrow: shot.endMs - shot.startMs }} onClick={() => seek(index)}><span>{String(index + 1).padStart(2, "0")}</span><i style={{ background: `linear-gradient(135deg, ${displayPalette(shot.palette).join(",")})` }} /></button>)}</div>
 
         <div className="tabs" role="tablist">{tabs.map((item) => <button key={item.id} role="tab" aria-selected={tab === item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}{item.count ? <sup>{item.count}</sup> : null}</button>)}</div>
 
         <div className="tab-panel">
-          {tab === "shots" && <div className="shot-list">{analysis.shots.map((shot, index) => <button key={shot.id} onClick={() => seek(index)} className={index === activeShot ? "active" : ""}><span className="shot-no">{String(index + 1).padStart(2, "0")}</span><span className="shot-thumb" style={{ background: `linear-gradient(135deg, ${shot.palette.join(",")})` }} /><span className="shot-copy"><b>{shot.narrativeFunction}</b><small>{shot.action}</small></span><span className="shot-tech"><b>{formatTime(shot.startMs)} → {formatTime(shot.endMs)}</b><small>{shot.shotSize} · {shot.camera} · {shot.motion}</small></span><span className="confidence">{Math.round(shot.confidence * 100)}%</span></button>)}</div>}
+          {tab === "shots" && <div className="shot-list">{analysis.shots.map((shot, index) => <button key={shot.id} onClick={() => seek(index)} className={index === activeShot ? "active" : ""}><span className="shot-no">{String(index + 1).padStart(2, "0")}</span><span className="shot-thumb" style={{ background: `linear-gradient(135deg, ${displayPalette(shot.palette).join(",")})` }} /><span className="shot-copy"><b>{shot.narrativeFunction}</b><small>{shot.action}</small></span><span className="shot-tech"><b>{formatTime(shot.startMs)} → {formatTime(shot.endMs)}</b><small>{shot.shotSize} · {shot.camera} · {shot.motion}</small></span><span className="confidence">{Math.round(shot.confidence * 100)}%</span></button>)}</div>}
           {tab === "narrative" && <NarrativePanel analysis={analysis} />}
           {tab === "production" && <ProductionPanel analysis={analysis} />}
           {tab === "template" && <TemplatePanel analysis={analysis} editing={editing} update={updateTemplate} />}

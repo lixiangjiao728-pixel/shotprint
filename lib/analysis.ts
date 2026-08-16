@@ -10,7 +10,7 @@ export const shotSchema = z.object({
   motion: z.string(),
   action: z.string(),
   lighting: z.string(),
-  palette: z.array(z.string()).min(1),
+  palette: z.array(z.string()),
   audio: z.string(),
   narrativeFunction: z.string(),
   evidence: z.string(),
