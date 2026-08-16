@@ -101,4 +101,4 @@ pnpm run test:e2e
 pnpm run lint
 ```
 
-`tests/video-adversarial.test.ts` 覆盖 300 秒完整结果、稀疏伪结果、本机切点低召回、空泛复刻文案、长时间轴抽样、检索身份和异步任务路由。`pnpm run test:real` 会调用真实 OSS 与百炼并产生费用，只能在明确授权和受控预算下运行；常规 CI 不执行它。
+`tests/video-adversarial.test.ts` 覆盖 300 秒完整结果、稀疏伪结果、本机切点低召回、空泛复刻文案、长时间轴抽样、检索身份和异步任务路由。`pnpm run test:real` 会调用真实 OSS 与百炼并产生费用，只能在明确授权和受控预算下运行；常规 CI 不执行它。指定真实文件时设置 `REAL_VIDEO_PATH` 和 `REAL_VIDEO_DURATION_MS`，验收同时检查完整时间轴、证据覆盖、复刻方案可执行性、费用结算和 OSS 临时文件清理。

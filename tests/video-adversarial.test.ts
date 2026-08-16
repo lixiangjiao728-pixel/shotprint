@@ -57,6 +57,17 @@ test("deterministic normalization closes model timecodes and distributes narrati
   assert.equal(validateEvidenceCoverage(normalized, 300_000, [0, 50_000, 100_000, 150_000, 200_000, 250_000, 300_000]), null);
 });
 
+test("deterministic normalization repairs duplicate and terminal model start times", () => {
+  const result = longAnalysis();
+  result.shots[3].startMs = result.shots[2].startMs;
+  result.shots.at(-1)!.startMs = 300_000;
+  result.shots.at(-1)!.endMs = 300_000;
+  const normalized = normalizeAnalysis(result, [0, 50_000, 100_000, 150_000, 200_000, 250_000, 300_000], 300_000);
+  assert.ok(normalized.shots.every((shot, index) => index === 0 || shot.startMs > normalized.shots[index - 1].startMs));
+  assert.ok(normalized.shots.every((shot) => shot.endMs > shot.startMs && shot.endMs <= 300_000));
+  assert.equal(validateEvidenceCoverage(normalized, 300_000, [0, 50_000, 100_000, 150_000, 200_000, 250_000, 300_000]), null);
+});
+
 test("non-operational model remake copy is rebuilt from validated shot evidence", () => {
   const result = longAnalysis();
   result.reusableTemplate = {

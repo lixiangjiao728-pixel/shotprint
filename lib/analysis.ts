@@ -175,14 +175,24 @@ export function normalizeAnalysis(input: unknown, localCuts: number[], expectedD
   const durationMs = expectedDurationMs ?? parsed.metadata.durationMs;
   const internalCuts = localCuts.filter((cut) => cut > 0 && cut < durationMs);
   const sorted = [...parsed.shots].sort((a, b) => a.startMs - b.startMs);
-  const hasOrderedStarts = sorted.every((shot, index) => index === 0 || (shot.startMs > sorted[index - 1].startMs && shot.startMs < durationMs));
-  const shots = sorted.map((shot, index) => ({
-    ...shot,
-    id: `shot-${String(index + 1).padStart(2, "0")}`,
-    startMs: hasOrderedStarts ? (index === 0 ? 0 : Math.round(shot.startMs)) : shot.startMs,
-    endMs: hasOrderedStarts ? (index === sorted.length - 1 ? durationMs : Math.round(sorted[index + 1].startMs)) : shot.endMs,
-    localBoundary: internalCuts.some((cut) => Math.abs(cut - shot.startMs) <= 500),
-  }));
+  const starts = sorted.reduce<number[]>((values, shot, index) => {
+    if (index === 0) return [0];
+    const previous = values[index - 1];
+    const minimum = previous + 1;
+    const maximum = durationMs - (sorted.length - index);
+    values.push(Math.min(maximum, Math.max(minimum, Math.round(shot.startMs))));
+    return values;
+  }, []);
+  const shots = sorted.map((shot, index) => {
+    const startMs = starts[index];
+    return {
+      ...shot,
+      id: `shot-${String(index + 1).padStart(2, "0")}`,
+      startMs,
+      endMs: index === sorted.length - 1 ? durationMs : starts[index + 1],
+      localBoundary: internalCuts.some((cut) => Math.abs(cut - startMs) <= 500),
+    };
+  });
   const totalShotSeconds = shots.reduce((sum, shot) => sum + Math.max(0, shot.endMs - shot.startMs), 0) / 1000;
   const dialogueSeconds = shots.reduce((sum, shot) => /^(unknown|无|none)$/i.test(shot.transcript.trim()) ? sum : sum + Math.max(0, shot.endMs - shot.startMs) / 1000, 0);
   let pace = [...parsed.narrative.pace].sort((a, b) => a.timeMs - b.timeMs);

@@ -119,6 +119,8 @@ pnpm run lint
 pnpm run test:real
 ```
 
+验证指定文件时可设置 `REAL_VIDEO_PATH` 和对应的 `REAL_VIDEO_DURATION_MS`；脚本会额外检查完整时间轴、证据覆盖、复刻方案可执行性、费用结算和临时文件清理。
+
 ## 项目结构
 
 ```text

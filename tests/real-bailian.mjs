@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { analysisResultSchema } from "../lib/analysis.ts";
+import { basename } from "node:path";
+import {
+  analysisResultSchema,
+  sampleAuditCuts,
+  validateActionability,
+  validateEvidenceCoverage,
+} from "../lib/analysis.ts";
 
 const origin = process.env.SHOTPRINT_TEST_ORIGIN || "http://127.0.0.1:43129";
-const video = await readFile(new URL("./fixtures/cc0-flower.mp4", import.meta.url));
+const videoPath = process.env.REAL_VIDEO_PATH;
+const video = await readFile(videoPath || new URL("./fixtures/cc0-flower.mp4", import.meta.url));
+const fileName = videoPath ? basename(videoPath) : "cc0-flower.mp4";
 const durationMs = Math.max(1_000, Number(process.env.REAL_VIDEO_DURATION_MS) || 5_000);
+const localCuts = Array.from(
+  { length: Math.max(1, Math.floor(durationMs / 5_000) - 1) },
+  (_, index) => (index + 1) * 5_000,
+);
 const signal = AbortSignal.timeout(15 * 60 * 1000);
 const testIp = `198.51.100.${Math.floor(Date.now() / 1000) % 250 + 1}`;
 
@@ -12,7 +24,7 @@ const sessionResponse = await fetch(`${origin}/api/upload-session`, {
   method: "POST",
   headers: { "content-type": "application/json", "x-forwarded-for": testIp },
   body: JSON.stringify({
-    fileName: "cc0-flower.mp4",
+    fileName,
     mimeType: "video/mp4",
     size: video.byteLength,
     durationMs,
@@ -42,7 +54,7 @@ const analysisResponse = await fetch(`${origin}/api/analyze`, {
     uploadToken: session.uploadToken,
     mimeType: "video/mp4",
     durationMs,
-    localCuts: Array.from({ length: Math.max(1, Math.floor(durationMs / 5_000) - 1) }, (_, index) => (index + 1) * 5_000),
+    localCuts,
   }),
   signal,
 });
@@ -62,6 +74,14 @@ if (finalResponse.status === 202) {
 }
 assert.equal(finalResponse.status, 200, `analysis failed safely: ${finalResponse.status} ${payload.error || ""}`);
 const result = analysisResultSchema.parse(payload.result);
+assert.equal(
+  validateEvidenceCoverage(result, durationMs, sampleAuditCuts(localCuts, durationMs)),
+  null,
+  "analysis did not cover the full 300-second evidence timeline",
+);
+assert.equal(validateActionability(result), null, "analysis did not produce an operational recreation plan");
+assert.ok(result.shots[0].startMs <= 500, "analysis missed the opening of the video");
+assert.ok(result.shots.at(-1).endMs >= durationMs - 500, "analysis missed the end of the video");
 assert.match(result.provenance.note, /cleanup=deleted/);
 assert.match(result.provenance.note, /budget=settled/);
 
