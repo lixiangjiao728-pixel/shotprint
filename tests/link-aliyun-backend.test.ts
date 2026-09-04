@@ -61,7 +61,7 @@ test("portable research session stores only safe payload and expires", async () 
 test("frontend routes paid calls through the configured Aliyun base", async () => {
   const source = await readFile(new URL("../app/ShotprintStudio.tsx", import.meta.url), "utf8");
   for (const path of ["/api/link-research", "/api/link-analyze", "/api/upload-session", "/api/analyze"]) assert.match(source, new RegExp(`apiUrl\\(\\"${path}`));
-  assert.match(source, /阿里云分析后端正常/);
+  assert.match(source, /视频分析：可用/);
   const backend = await readFile(new URL("../worker/aliyun-backend/server.ts", import.meta.url), "utf8");
   assert.match(backend, /ORIGIN_NOT_ALLOWED/);
   assert.match(backend, /shotprint-ai-film\.lixiangjia27\.chatgpt\.site/);

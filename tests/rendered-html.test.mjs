@@ -13,7 +13,7 @@ test("server-renders the Shotprint product, not the starter", async () => {
   assert.equal(response.status, 200);
   const html = await response.text();
   assert.match(html, /镜谱 Shotprint/);
-  assert.match(html, /把一条短片/);
+  assert.match(html, /别让爆款/);
   assert.match(html, /打开 20\.8 秒合成样片/);
   assert.match(html, /逐镜拆解/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);

@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnalysisResult, analysisResultSchema, analysisToCsv, analysisToMarkdown, formatTime, sampleTimelineItems } from "../lib/analysis";
 import { demoAnalysis } from "../lib/demo-data";
 import LinkAnalysisDesk from "./LinkAnalysisDesk";
@@ -31,7 +31,7 @@ const MAX_VIDEO_DURATION_MS = MAX_VIDEO_DURATION_SECONDS * 1000;
 const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
 const COLLECTION_LOAD_WATCHDOG_MS = 55000;
 const COLLECTION_STALL_WATCHDOG_MS = 18000;
-const LINK_STAGES = ["评论采集", "评论续采", "深度检索", "交叉核验", "视听分析", "综合报告"] as const;
+const LINK_STAGES = ["读观众反应", "补齐评论", "查找背景", "核对判断", "拆开镜头", "整理方案"] as const;
 
 function displayPalette(palette?: string[]) {
   if (!palette?.length) return ["#101218", "#A8C7C0"];
@@ -44,9 +44,24 @@ function linkStageStatus(index: number, phase: LinkPhase, activeStage: number, r
   return index < activeStage ? "done" : index === activeStage ? "active" : "pending";
 }
 
+function moveTabFocus<T extends string>(event: KeyboardEvent<HTMLButtonElement>, tabs: readonly T[], active: T, update: (tab: T) => void) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const activeIndex = tabs.indexOf(active);
+  const nextIndex = event.key === "Home" ? 0
+    : event.key === "End" ? tabs.length - 1
+      : (activeIndex + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  const next = tabs[nextIndex];
+  const tablist = event.currentTarget.parentElement;
+  update(next);
+  window.requestAnimationFrame(() => {
+    tablist?.querySelector<HTMLButtonElement>(`[data-tab="${next}"]`)?.focus();
+  });
+}
+
 const PHASE_COPY: Record<Phase, string> = {
-  idle: "等待素材", reading: "读取视频信息", detecting: "在本机识别切点", uploading: "安全直传到私有 OSS",
-  analyzing: "重建叙事与生产假设", ready: "分析完成", error: "分析中断",
+  idle: "等待选择视频", reading: "读取视频", detecting: "查找转场", uploading: "上传视频",
+  analyzing: "拆解镜头和节奏", ready: "分析完成", error: "分析失败",
 };
 
 function download(name: string, body: string, type: string) {
@@ -202,6 +217,8 @@ export default function ShotprintStudio() {
   const duration = analysis?.metadata.durationMs ?? 20800;
   const currentShot = analysis?.shots[activeShot];
   const apiUrl = useCallback((path: string) => joinApi(apiBase, path), [apiBase]);
+  const linkBusy = ["collecting", "continuing", "researching", "cross-checking", "recording"].includes(linkPhase);
+  const extensionActionNeeded = bridgeStatus === "missing" || bridgeStatus === "old";
 
   const armCollectionWatchdog = useCallback((requestId: string, timeoutMs: number) => {
     const schedule = (activeRequestId: string, delayMs: number) => {
@@ -366,7 +383,7 @@ export default function ShotprintStudio() {
     if (!link.trim()) { setLinkPhase("error"); setLinkError("先粘贴一个抖音、B站或小红书链接。"); return; }
     if (linkPlatform === "unknown") { setLinkPhase("error"); setLinkError("暂不识别这个平台，请粘贴完整的原视频链接。"); return; }
     if (bridgeStatus === "old") { setLinkPhase("error"); setLinkError(`检测到旧版扩展，请在扩展管理页重新加载 ${EXTENSION_VERSION}，然后刷新本网页。`); return; }
-    if (bridgeStatus !== "ready") { setLinkPhase("error"); setLinkError(`网页没有检测到取证桥。请在扩展管理页重新加载 ${EXTENSION_VERSION}，然后刷新本网页。`); return; }
+    if (bridgeStatus !== "ready") { setLinkPhase("error"); setLinkError(`没有检测到浏览器扩展。请在扩展管理页重新加载 ${EXTENSION_VERSION}，然后刷新本页。`); return; }
     if (linkTimerRef.current) window.clearTimeout(linkTimerRef.current);
     collectionRetryRef.current = 0;
     const requestId = crypto.randomUUID(); linkRequestRef.current = requestId; linkCollectionModeRef.current = "initial";
@@ -389,7 +406,7 @@ export default function ShotprintStudio() {
 
   const runDeepResearch = async () => {
     const payload = pendingLinkPayload;
-    if (!payload?.comments.length) { setLinkPhase("error"); setLinkError("请先取得评论样本，再开始深度研究。"); return; }
+    if (!payload?.comments.length) { setLinkPhase("error"); setLinkError("还没有读到评论，请先读取评论。"); return; }
     setLinkPhase("researching"); setLinkStage(2); setLinkError(""); setLinkAnalysis(null);
     setResearchProgress({ completedQueries: 0, totalQueries: 8, sourceCount: 0, domainCount: 0 });
     try {
@@ -397,7 +414,7 @@ export default function ShotprintStudio() {
       let response = await fetch(apiUrl("/api/link-research"), { method: "POST", headers: { "content-type": "application/json; charset=utf-8", "x-shotprint-contract": digest.contract }, body: JSON.stringify(body) });
       if (response.status === 202 && response.headers.get("content-type")?.includes("application/json")) {
         const accepted = await response.json() as { researchJobId?: string; pollAfterMs?: number };
-        if (!accepted.researchJobId) throw new Error("深度研究任务没有返回可查询编号。");
+        if (!accepted.researchJobId) throw new Error("公开资料查询没有正常开始，请重试。");
         const deadline = Date.now() + 8 * 60 * 1000;
         let pollDelay = Math.max(1000, Math.min(5000, Number(accepted.pollAfterMs) || 2000));
         while (Date.now() < deadline) {
@@ -407,17 +424,17 @@ export default function ShotprintStudio() {
           setResearchProgress((current) => ({ ...current, stage: "deep-search" }));
           pollDelay = Math.min(5000, Math.round(pollDelay * 1.15));
         }
-        if (response.status === 202) throw new Error("深度研究超过8分钟仍未完成；请直接重试深度研究，无需重新采集评论。");
+        if (response.status === 202) throw new Error("查找公开资料超过 8 分钟仍未完成。请直接重试，不用重新读取评论。");
       }
       const contentType = response.headers.get("content-type") || "";
       let finalResult: { researchSessionId?: string; receipt?: ResearchProgress } | null = null;
       if (contentType.includes("application/json")) {
         const data = await response.json() as { status?: string; researchSessionId?: string; receipt?: ResearchProgress; errorCode?: string; userMessage?: string };
-        if (!response.ok || data.status === "failed") throw new Error(`${data.errorCode || "SEARCH_PROVIDER_ERROR"}：${data.userMessage || "深度研究失败"}`);
+        if (!response.ok || data.status === "failed") throw new Error(`${data.errorCode || "SEARCH_PROVIDER_ERROR"}：${data.userMessage || "公开资料查询失败"}`);
         finalResult = data;
         setLinkPhase("cross-checking"); setLinkStage(3);
       } else {
-        if (!response.ok || !response.body) throw new Error(await readSafeApiError(response, "深度研究服务没有开始"));
+        if (!response.ok || !response.body) throw new Error(await readSafeApiError(response, "公开资料查询没有开始"));
         const reader = response.body.getReader(); const decoder = new TextDecoder(); let buffer = "";
         while (true) {
         const { done, value } = await reader.read(); buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -430,22 +447,22 @@ export default function ShotprintStudio() {
             setLinkPhase(data.stage === "cross-check" ? "cross-checking" : "researching"); setLinkStage(data.stage === "cross-check" ? 3 : 2);
             setResearchProgress((current) => ({ ...current, category: String(data.category || current.category || ""), completedQueries: Math.max(current.completedQueries, completed), totalQueries: Number(data.total || current.totalQueries), sourceCount: Math.max(current.sourceCount, sourceCount), domainCount: Math.max(current.domainCount, domainCount) }));
           }
-          if (event === "failed") throw new Error(`${String(data.errorCode || "SEARCH_PROVIDER_ERROR")}：${String(data.userMessage || "深度研究失败")}`);
+          if (event === "failed") throw new Error(`${String(data.errorCode || "SEARCH_PROVIDER_ERROR")}：${String(data.userMessage || "公开资料查询失败")}`);
           if (event === "complete") finalResult = data as { researchSessionId?: string; receipt?: ResearchProgress };
         }
           if (done) break;
         }
       }
-      if (!finalResult?.researchSessionId) throw new Error("深度研究没有返回60分钟研究会话。");
+      if (!finalResult?.researchSessionId) throw new Error("公开资料查询没有返回结果，请重试。");
       setResearchSessionId(finalResult.researchSessionId); if (finalResult.receipt) setResearchProgress((current) => ({ ...current, ...finalResult!.receipt }));
       const collectionDetails = { engine: payload.engine, strategyVersion: payload.strategyVersion, sampleCount: evidence.receipt.originalSampleCount, evidenceSampleCount: evidence.receipt.evidenceSampleCount, targetCount: payload.targetCount, pageCount: payload.pageCount, cursorCount: payload.cursorCount, scrollActions: payload.scrollActions, durationMs: payload.durationMs, stopReason: payload.stopReason, continuationAvailable: payload.continuationAvailable, sortMode: payload.sortMode };
       const linkResponse = await fetch(apiUrl("/api/link-analyze"), { method: "POST", headers: { "content-type": "application/json", "x-shotprint-contract": digest.contract }, body: JSON.stringify({ url: payload.url, platform: payload.platform, title: payload.title, author: payload.author, description: payload.description, videoId: payload.videoId, publishedAt: payload.publishedAt, coverUrl: payload.coverUrl, method: payload.collectionId ? "extension" : "manual", researchSessionId: finalResult.researchSessionId, collectionDetails }) });
-      if (!linkResponse.ok) throw new Error(await readSafeApiError(linkResponse, "社会舆情报告合并失败"));
+      if (!linkResponse.ok) throw new Error(await readSafeApiError(linkResponse, "评论和公开资料没有合并成功"));
       const linkData = await linkResponse.json() as { result?: LinkAnalysis; error?: string };
-      if (!linkData.result) throw new Error(linkData.error || "社会舆情报告合并失败。");
+      if (!linkData.result) throw new Error(linkData.error || "评论和公开资料没有合并成功。");
       setLinkAnalysis(mergeLocalAudienceEvidence(linkData.result, evidence.comments, payload.collectionId ? "extension" : "manual", collectionDetails)); setLinkFixture(false); setLinkPhase("awaiting-video"); setLinkStage(4);
       window.setTimeout(() => document.getElementById("link-result")?.scrollIntoView({ behavior: "smooth" }), 50);
-    } catch (caught) { setLinkPhase("error"); setLinkError(caught instanceof Error ? caught.message : "深度研究意外中断。"); }
+    } catch (caught) { setLinkPhase("error"); setLinkError(caught instanceof Error ? caught.message : "公开资料查询中断了，请重试。"); }
   };
 
   const runManualLinkAnalysis = () => {
@@ -470,7 +487,7 @@ export default function ShotprintStudio() {
       if (metadata.durationMs > MAX_VIDEO_DURATION_MS) throw new Error("视频超过 300 秒。请截取最想分析的段落。");
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       setFile(selected); setVideoUrl(metadata.url); setFileAcquisition(acquisition); setFileAudioPresent(audioPresent); setPhase("idle"); setProgress(0); setAnalysis(null); setIsDemo(false);
-      setCaptureWarning(consent ? "文件校验完成，正在自动启动视听分析。" : "文件已校验。勾选素材授权后会自动开始，无需再次点击。" );
+      setCaptureWarning(consent ? "文件检查完成，正在开始分析。" : "文件可以使用。勾选授权后会自动开始。" );
       if (consent) window.setTimeout(() => void runAnalysis(selected, metadata.url, acquisition, audioPresent), 0);
     } catch (caught) { autoAnalyzeRef.current = false; setError(caught instanceof Error ? caught.message : "视频读取失败"); setPhase("error"); }
   };
@@ -505,7 +522,7 @@ export default function ShotprintStudio() {
   };
 
   const startTabCapture = async () => {
-    if (!pendingLinkPayload || !researchSessionId) { setLinkError("请先完成评论深度研究，再录制原视频标签页。"); return; }
+    if (!pendingLinkPayload || !researchSessionId) { setLinkError("请先读完评论并查找公开资料，再录制视频标签页。"); return; }
     if (!navigator.mediaDevices?.getDisplayMedia || typeof MediaRecorder === "undefined") { setLinkError("当前浏览器不支持标签页录制，请改用上传本地视频。"); return; }
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true, preferCurrentTab: false, selfBrowserSurface: "exclude", surfaceSwitching: "exclude" } as DisplayMediaStreamOptions);
@@ -659,8 +676,8 @@ export default function ShotprintStudio() {
   };
 
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
-    { id: "shots", label: "逐镜拆解", count: analysis?.shots.length }, { id: "narrative", label: "叙事曲线" },
-    { id: "production", label: "参数推测" }, { id: "template", label: "复用模板" },
+    { id: "shots", label: "镜头列表", count: analysis?.shots.length }, { id: "narrative", label: "故事节奏" },
+    { id: "production", label: "拍摄参考" }, { id: "template", label: "创作清单" },
   ];
 
   const demoFrame = useMemo(() => {
@@ -670,57 +687,57 @@ export default function ShotprintStudio() {
 
   return (
     <main id="main-content">
-      <a className="skip-link" href="#workspace">跳到分析工作台</a>
+      <a className="skip-link" href="#workspace">跳到视频拆解</a>
       <header className="topbar">
         <a className="wordmark" href="#top" aria-label="镜谱首页"><span className="mark">镜</span><span>镜谱 <i>SHOTPRINT</i></span></a>
-        <nav aria-label="页面导航"><a href="#how">拆解逻辑</a><a href="#link-result">链接分析台</a><a href="#result">分析台</a><span className="status-dot">本地优先</span></nav>
+        <nav aria-label="页面导航"><a href="#how">为什么值得拆</a><a href="#link-result">完整分析</a><a href="#result">镜头拆解</a><span className="status-dot">视频不长期保存</span><a className="topbar-cta" href="#workspace">拆一条视频</a></nav>
       </header>
 
       <section className="hero" id="top" aria-labelledby="hero-title">
         <div className="hero-copy">
-          <div className="hero-kicker"><span>SHOTPRINT / 镜谱</span><i>AI FILM FORENSICS</i></div>
-          <h1 id="hero-title">从热议到镜头，<br /><span>逐帧有据。</span></h1>
-          <p className="lede">识别一条短片为什么被看见、被共鸣、被争议，再把传播证据与真实时间码合成一份可编辑的创作蓝图。</p>
+          <h1 id="hero-title">别让爆款，<br /><span>只躺在收藏夹。</span></h1>
+          <p className="lede">“这条节奏真好”，然后呢？粘贴视频链接，看清观众在意什么、镜头怎样推进，以及哪些做法能用在你的下一条内容里。</p>
           <div className="evidence-reel" aria-hidden="true">
             <i className="reel-playhead" />
-            <span><small>00:00</small><b>钩子</b></span>
-            <span><small>00:03.8</small><b>切点</b></span>
-            <span><small>00:11.2</small><b>共鸣</b></span>
-            <span><small>00:20.8</small><b>蓝图</b></span>
+            <span><small>00:00</small><b>开头</b></span>
+            <span><small>00:03.8</small><b>转场</b></span>
+            <span><small>00:11.2</small><b>转折</b></span>
+            <span><small>00:20.8</small><b>结尾</b></span>
           </div>
-          <div className="hero-notes"><span>01 本机找切点</span><span>02 百炼读视听</span><span>03 证据化推测</span></div>
+          <div className="hero-notes"><span>看懂观众反应</span><span>拆开镜头节奏</span><span>带走创作思路</span></div>
         </div>
 
-        <div className="ingest-card" id="workspace">
-          <div className="card-head"><div><i /><span>新建分析</span></div><span className="mono">WORKSPACE / 001</span></div>
-          <div className="ingest-mode" role="tablist" aria-label="分析输入方式"><button className={inputMode === "link" ? "active" : ""} onClick={() => setInputMode("link")} role="tab" aria-selected={inputMode === "link"}>分析公开视频</button><button className={inputMode === "video" ? "active" : ""} onClick={() => setInputMode("video")} role="tab" aria-selected={inputMode === "video"}>拆解本地视频</button></div>
+        <div className="ingest-card" id="workspace" aria-busy={linkBusy || !["idle", "ready", "error"].includes(phase)}>
+          <div className="card-head"><div><i /><span>拿一条视频试试</span></div></div>
+          <div className="ingest-mode" role="tablist" aria-label="分析输入方式"><button id="input-link-tab" data-tab="link" type="button" className={inputMode === "link" ? "active" : ""} onClick={() => setInputMode("link")} onKeyDown={(event) => moveTabFocus(event, ["link", "video"] as const, inputMode, setInputMode)} role="tab" aria-selected={inputMode === "link"} aria-controls="link-input-panel" tabIndex={inputMode === "link" ? 0 : -1}>公开视频</button><button id="input-video-tab" data-tab="video" type="button" className={inputMode === "video" ? "active" : ""} onClick={() => setInputMode("video")} onKeyDown={(event) => moveTabFocus(event, ["link", "video"] as const, inputMode, setInputMode)} role="tab" aria-selected={inputMode === "video"} aria-controls="video-input-panel" tabIndex={inputMode === "video" ? 0 : -1}>本地视频</button></div>
           <div className="sr-only"><input ref={fileInput} type="file" accept="video/mp4,video/quicktime,video/webm" aria-label="选择视频文件" onChange={handleInput} /><input ref={downloadedFileInput} type="file" accept="video/mp4,video/quicktime" aria-label="选择从GreenVideo下载的视频文件" onChange={handleDownloadedInput} /><span>我拥有该素材的分析权利</span><span>开始逐镜拆解（选择文件后自动运行）</span><span>打开 20.8 秒合成样片</span></div>
-          {inputMode === "link" ? <div className="link-ingest">
-            <label htmlFor="source-link">原视频链接</label>
-            <div className="link-input-shell"><span aria-hidden="true">URL</span><input ref={linkInputRef} id="source-link" name="source-link" type="url" autoComplete="off" spellCheck={false} value={link} onChange={(event) => handleLinkChange(event.target.value)} placeholder="粘贴抖音、B站或小红书原链接…" inputMode="url" /></div>
-            <div className="link-detect" role="status" aria-live="polite"><span className={`platform-mini ${linkPlatform}`}>{linkPlatform === "douyin" ? "抖音" : linkPlatform === "bilibili" ? "B站" : linkPlatform === "xiaohongshu" ? "小红书" : "等待链接"}</span><span>{linkPhase === "collecting" ? "正在打开原页面并读取已加载评论…" : linkPhase === "analyzing" ? "评论已到达，正在组织证据…" : bridgeStatus === "ready" ? (linkPlatform === "unknown" ? "扩展已连接；粘贴链接后点击开始" : "链接已识别；点击下方按钮后自动注入取证脚本") : bridgeStatus === "old" ? `检测到旧版扩展；请重新加载 ${EXTENSION_VERSION}` : bridgeStatus === "checking" ? "正在检查取证桥…" : "未检测到取证桥；重新加载扩展后刷新网页"}</span></div>
+          {inputMode === "link" ? <div className="link-ingest" id="link-input-panel" role="tabpanel" aria-labelledby="input-link-tab">
+            <label htmlFor="source-link">把想拆的视频粘在这里</label>
+            <div className={`link-input-shell ${link ? "has-value" : ""}`}><span aria-hidden="true">URL</span><input ref={linkInputRef} id="source-link" name="source-link" type="url" autoComplete="off" spellCheck={false} value={link} onChange={(event) => handleLinkChange(event.target.value)} placeholder="粘贴抖音、B站或小红书原链接…" inputMode="url" />{link && <button type="button" className="input-clear" aria-label="清除原视频链接" onClick={() => { handleLinkChange(""); linkInputRef.current?.focus(); }}>清除</button>}</div>
+            <div className="link-detect" role="status" aria-live="polite"><span className={`platform-mini ${linkPlatform}`}>{linkPlatform === "douyin" ? "抖音" : linkPlatform === "bilibili" ? "B站" : linkPlatform === "xiaohongshu" ? "小红书" : "未粘贴"}</span><span>{linkPhase === "collecting" ? "正在打开视频页面并读取评论…" : linkPhase === "analyzing" ? "评论已读完，正在生成结果…" : bridgeStatus === "ready" ? (linkPlatform === "unknown" ? "浏览器扩展已连接" : "链接已识别，可以开始") : bridgeStatus === "old" ? `浏览器扩展需要更新到 ${EXTENSION_VERSION}` : bridgeStatus === "checking" ? "正在检查浏览器扩展…" : "需要先安装浏览器扩展"}</span></div>
             <details className="system-check">
-              <summary><span>系统就绪度</span><b className={bridgeStatus === "ready" && backendStatus !== "checking" ? "ready" : "waiting"}>{bridgeStatus === "ready" ? "取证桥已连接" : "需要检查"}</b></summary>
-              <div className="link-self-check" role="status"><span>扩展 {bridgeDiagnostics?.version || (bridgeStatus === "old" ? "旧版" : "待检查")}</span><span>{bridgeStatus === "ready" ? "主采集通道可用" : bridgeStatus === "old" ? "版本过旧" : bridgeStatus === "missing" ? "桥接未连接" : "桥接检查中"}</span><span>{bridgeDiagnostics?.companion?.ok ? `高级兜底 ${bridgeDiagnostics.companion.version || "已运行"}` : "高级兜底未启动（不影响主采集）"}</span>{bridgeDiagnostics?.companion?.ok && <><span>{bridgeDiagnostics.companion.browserAct === "installed" ? "BrowserAct已安装" : "BrowserAct待检查"}</span><span>{bridgeDiagnostics.companion.chromeDirect ? "Chrome直连已配置" : "Chrome直连未配置"}</span><span>{linkPlatform === "unknown" ? "平台登录待检测" : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "ready" ? `${linkPlatform}页面可读` : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "login_required" ? `${linkPlatform}需要登录` : `${linkPlatform}登录状态未知`}</span><span>{pairingStatus === "paired" || bridgeDiagnostics.companion.paired ? "伴侣已配对" : "伴侣待配对"}</span></>}<span>{backendStatus === "aliyun" ? "阿里云分析后端正常" : backendStatus === "fallback" ? "分析后端回退到Sites" : "分析后端检查中"}</span><span>{searchStatus === "configured" ? "百炼联网已配置" : searchStatus === "disabled" ? "联网搜索不可用" : "联网搜索检查中"}</span><button className="diagnostic-copy" type="button" onClick={() => void downloadExtensionPackage()}>下载0.6.9扩展</button><button className="diagnostic-copy" type="button" onClick={() => void copyDiagnostics()}>{diagnosticCopied ? "已复制安全诊断" : "复制安全诊断信息"}</button></div>
+              <summary><span>连接状态</span><b className={bridgeStatus === "ready" && backendStatus !== "checking" ? "ready" : "waiting"}>{bridgeStatus === "ready" ? "扩展已连接" : "查看详情"}</b></summary>
+              <div className="link-self-check" role="status"><span>浏览器扩展：{bridgeDiagnostics?.version || (bridgeStatus === "old" ? "需要更新" : "检查中")}</span><span>{bridgeStatus === "ready" ? "可以读取评论" : bridgeStatus === "old" ? "版本过旧" : bridgeStatus === "missing" ? "尚未连接" : "正在检查"}</span><span>{bridgeDiagnostics?.companion?.ok ? `本地辅助工具：${bridgeDiagnostics.companion.version || "已运行"}` : "本地辅助工具：未启动，不影响基本功能"}</span>{bridgeDiagnostics?.companion?.ok && <><span>{bridgeDiagnostics.companion.browserAct === "installed" ? "BrowserAct：已安装" : "BrowserAct：未安装"}</span><span>{bridgeDiagnostics.companion.chromeDirect ? "Chrome：可以直连" : "Chrome：未设置直连"}</span><span>{linkPlatform === "unknown" ? "平台登录：粘贴链接后检查" : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "ready" ? `${linkPlatform}：页面可读` : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "login_required" ? `${linkPlatform}：请先登录` : `${linkPlatform}：登录状态未知`}</span><span>{pairingStatus === "paired" || bridgeDiagnostics.companion.paired ? "本地辅助工具：已配对" : "本地辅助工具：未配对"}</span></>}<span>{backendStatus === "aliyun" ? "视频分析：可用" : backendStatus === "fallback" ? "视频分析：正在使用备用服务" : "视频分析：检查中"}</span><span>{searchStatus === "configured" ? "公开资料搜索：可用" : searchStatus === "disabled" ? "公开资料搜索：不可用" : "公开资料搜索：检查中"}</span><button className="diagnostic-copy" type="button" onClick={() => void downloadExtensionPackage()}>下载扩展 {EXTENSION_VERSION}</button><button className="diagnostic-copy" type="button" onClick={() => void copyDiagnostics()}>{diagnosticCopied ? "诊断信息已复制" : "复制诊断信息"}</button></div>
             </details>
             {bridgeDiagnostics?.companion?.ok && !(pairingStatus === "paired" || bridgeDiagnostics.companion.paired) && <div className="companion-pair"><label htmlFor="companion-code">本地伴侣配对码</label><input id="companion-code" inputMode="numeric" maxLength={6} value={pairingCode} onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6位配对码" /><button className="secondary" disabled={pairingStatus === "pairing"} onClick={() => void pairCompanion()}>{pairingStatus === "pairing" ? "配对中…" : "配对本地伴侣"}</button></div>}
             <div className="link-stages" aria-label="链接分析六阶段">{LINK_STAGES.map((stage, index) => { const status = linkStageStatus(index, linkPhase, linkStage, linkPlatform !== "unknown"); return <div className={status} key={stage}><span>0{index + 1}</span><b>{stage}</b><small>{status === "done" ? "已完成" : status === "active" ? "进行中" : "等待"}</small></div>; })}</div>
-            <button className="primary link-primary" disabled={!link || bridgeStatus !== "ready" || ["collecting", "continuing", "researching", "cross-checking", "recording"].includes(linkPhase)} onClick={runLinkCollection}>{linkPhase === "collecting" ? "采集首批100条评论…" : bridgeStatus === "old" ? "请先更新扩展" : bridgeStatus !== "ready" ? "请先重新加载扩展" : "开始采集100条评论 →"}</button>
+            <button className={`primary link-primary ${extensionActionNeeded ? "setup-action" : ""}`} type="button" disabled={bridgeStatus === "checking" || linkBusy || (!extensionActionNeeded && !link)} onClick={extensionActionNeeded ? () => void downloadExtensionPackage() : runLinkCollection}>{linkPhase === "collecting" ? "正在看观众怎么说…" : bridgeStatus === "checking" ? "正在检查浏览器扩展…" : bridgeStatus === "old" ? `更新浏览器扩展 →` : bridgeStatus === "missing" ? `安装浏览器扩展 →` : !link ? "先粘贴一条视频链接" : "先看观众怎么说 →"}</button>
+            {extensionActionNeeded && <div className="setup-route" role="note"><b>{bridgeStatus === "old" ? "更新后刷新本页" : "首次使用需要安装"}</b><ol><li>下载并解压</li><li>在扩展管理页加载文件夹</li><li>刷新本页</li></ol></div>}
             {pendingLinkPayload && ["comments-ready", "error"].includes(linkPhase) && <div className="collection-checkpoint" role="status">
               <b>已取得 {pendingLinkPayload.comments.length} / {pendingLinkPayload.targetCount || (pendingLinkPayload.collectionId ? 100 : pendingLinkPayload.comments.length)} 条匿名评论</b>
               <span>{pendingLinkPayload.engine === "browser-act-network" ? "BrowserAct网络响应" : pendingLinkPayload.engine === "browser-act-dom" ? "BrowserAct DOM兜底" : pendingLinkPayload.engine === "extension-api" ? "页面接口" : "扩展DOM"} · {pendingLinkPayload.pageCount || pendingLinkPayload.cursorCount || 0} 页/游标 · 滚动 {pendingLinkPayload.scrollActions || 0} 次 · {Math.round((pendingLinkPayload.durationMs || 0) / 1000)} 秒 · {pendingLinkPayload.stopReason || "手动导入"} · 当前排序 {pendingLinkPayload.sortMode || "unknown"}</span>
-              {pendingLinkPayload.comments.length < 100 && <small>样本不足100条，结果可能偏向页面当前排序与先加载的评论。</small>}
-              <div><button className="secondary" disabled={!pendingLinkPayload.continuationAvailable || linkPhase === "continuing"} onClick={continueLinkCollection}>{linkPhase === "continuing" ? "续采中…" : "继续采集至200条"}</button><button className="primary" onClick={() => void runDeepResearch()}>用现有样本开始深度研究</button></div>
+              {pendingLinkPayload.comments.length < 100 && <small>评论较少，结果可能受页面排序影响。</small>}
+              <div><button className="secondary" disabled={!pendingLinkPayload.continuationAvailable || linkPhase === "continuing"} onClick={continueLinkCollection}>{linkPhase === "continuing" ? "继续读取中…" : "再读取一些评论"}</button><button className="primary" onClick={() => void runDeepResearch()}>继续查找公开资料</button></div>
             </div>}
-            {["researching", "cross-checking"].includes(linkPhase) && <div className="research-live" role="status"><b>{linkPhase === "cross-checking" ? "正在交叉核验" : "正在执行8类深度检索"}</b><span>{researchProgress.completedQueries} / {researchProgress.totalQueries} 组查询 · {researchProgress.sourceCount} 个来源 · {researchProgress.domainCount} 个域名</span><i><em style={{ width: `${Math.min(100, (researchProgress.completedQueries / Math.max(1, researchProgress.totalQueries)) * 100)}%` }} /></i></div>}
+            {["researching", "cross-checking"].includes(linkPhase) && <div className="research-live" role="status"><b>{linkPhase === "cross-checking" ? "正在核对信息" : "正在查找公开资料"}</b><span>已完成 {researchProgress.completedQueries} / {researchProgress.totalQueries} 项 · 找到 {researchProgress.sourceCount} 个来源</span><i><em style={{ width: `${Math.min(100, (researchProgress.completedQueries / Math.max(1, researchProgress.totalQueries)) * 100)}%` }} /></i></div>}
             {linkAnalysis && linkPhase === "awaiting-video" && <div className="video-evidence-gate" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const selected = event.dataTransfer.files?.[0]; if (selected) void chooseFile(selected, "download_upload"); }}>
-              <b>社会原因与观众反馈已完成 · 现在补充原片证据</b>
-              <span>推荐下载公开原片后分析。返回本页选择文件即自动完成上传、视听取证和最终报告合并。</span>
-              <label className="consent"><input type="checkbox" checked={consent} onChange={(event) => handleConsentChange(event.target.checked)} /><span>我拥有该素材的分析权利，并同意临时上传到私有 OSS 与阿里云百炼分析</span></label>
+              <b>评论和公开资料已经整理好，还需要视频文件</b>
+              <span>上传原片后，才能标出具体镜头和时间点。</span>
+              <label className="consent"><input type="checkbox" checked={consent} onChange={(event) => handleConsentChange(event.target.checked)} /><span>我有权使用这段视频，并同意为完成分析临时上传。视频不会长期保存。</span></label>
               <div className="video-evidence-options">
-                <div className="recommended"><small>推荐</small><b>下载原片并分析</b><span>复制当前链接并打开GreenVideo；下载MP4后回到这里。</span><button className="primary" type="button" onClick={() => void openGreenVideo()}>复制链接并打开 GreenVideo ↗</button><button className="secondary" type="button" onClick={() => downloadedFileInput.current?.click()}>选择已下载的 MP4 / MOV</button></div>
-                <div><small>已有文件</small><b>上传已有视频</b><span>直接选择你电脑中的MP4/MOV；选择后自动分析。</span><button className="secondary" type="button" onClick={() => fileInput.current?.click()}>选择本地视频</button></div>
-                <div><small>无法下载时</small><b>录制原视频标签页</b><span>选择原视频标签页并勾选共享音频，最长300秒。</span><button className="secondary" type="button" onClick={() => void startTabCapture()}>开始标签页录制</button></div>
+                <div className="recommended"><small>推荐</small><b>下载原片</b><span>打开 GreenVideo 下载 MP4，然后回到这里选择文件。</span><button className="primary" type="button" onClick={() => void openGreenVideo()}>打开 GreenVideo ↗</button><button className="secondary" type="button" onClick={() => downloadedFileInput.current?.click()}>选择下载好的视频</button></div>
+                <div><small>电脑里已有视频</small><b>直接上传</b><span>选择 MP4 或 MOV，之后会自动开始分析。</span><button className="secondary" type="button" onClick={() => fileInput.current?.click()}>选择视频</button></div>
+                <div><small>无法下载</small><b>录制当前标签页</b><span>录制时请选择原视频标签页并共享音频，最长 300 秒。</span><button className="secondary" type="button" onClick={() => void startTabCapture()}>开始录制</button></div>
               </div>
               <div className="download-drop">把GreenVideo下载的 MP4 / MOV 拖到这里</div>
               {file && <small>{file.name} · {(file.size / 1024 / 1024).toFixed(1)}MB · {phase === "idle" ? consent ? "即将自动分析" : "等待勾选授权" : PHASE_COPY[phase]}</small>}
@@ -728,36 +745,36 @@ export default function ShotprintStudio() {
             </div>}
             {linkPhase === "recording" && <div className="recording-live" role="status"><b>● {recordingPaused ? "录制已暂停" : "正在录制标签页"}</b><span>{recordingSeconds}s / 300s · {(recordingBytes / 1024 / 1024).toFixed(1)}MB / 300MB</span>{captureWarning && <small>{captureWarning}</small>}<div><button className="secondary" onClick={toggleTabCapturePause}>{recordingPaused ? "继续录制" : "暂停"}</button><button className="secondary" onClick={stopTabCapture}>停止并使用这段录制</button></div></div>}
             {linkError && <div className="link-error"><b>采集没有继续</b><span>{linkError}</span><button onClick={() => setLinkError("")}>知道了</button></div>}
-            <details className="manual-import"><summary>遇到验证码 / 403 / 429？改用手动评论</summary><p>每行粘贴一条公开评论；不上传账号、头像或用户 ID。评论只用于本次报告，刷新后即清除。</p><textarea value={manualComments} onChange={(event) => setManualComments(event.target.value)} placeholder="例如：第一秒就被吸引了\n这个转场太丝滑\n想看同系列第二集" rows={4} /><button className="secondary" disabled={!manualComments.trim() || linkPhase === "analyzing"} onClick={runManualLinkAnalysis}>用手动评论生成报告</button></details>
-            <p className="link-risk">登录态只在你的浏览器里使用；镜谱不接收 Cookie、用户名、头像或用户 ID。遇到验证码、403 或 429 会停止。</p>
-            <button className="fixture-link" onClick={loadLinkDemo}>打开链接分析演示夹具（不代表实时采集）</button>
-          </div> : <div className={`dropzone ${file ? "has-file" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
+            <details className="manual-import"><summary>评论读取失败？可以手动粘贴</summary><p>每行一条评论。不要粘贴用户名、头像或用户 ID。</p><textarea value={manualComments} onChange={(event) => setManualComments(event.target.value)} placeholder="例如：第一秒就被吸引了\n这个转场很顺\n想看下一集" rows={4} /><button className="secondary" disabled={!manualComments.trim() || linkPhase === "analyzing"} onClick={runManualLinkAnalysis}>分析这些评论</button></details>
+            <p className="link-risk">镜谱不会接收你的 Cookie、用户名、头像或用户 ID。遇到验证码或平台限制时会停止读取。</p>
+            <button className="fixture-link" onClick={loadLinkDemo}>先看一份完整结果</button>
+          </div> : <div className={`dropzone ${file ? "has-file" : ""}`} id="video-input-panel" role="tabpanel" aria-labelledby="input-video-tab" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
             <button className="drop-button" onClick={() => fileInput.current?.click()} aria-label="选择视频文件">
               <span className="film-hole">＋</span>
-              {file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(1)} MB · {phase === "idle" ? consent ? "即将自动分析" : "等待授权" : PHASE_COPY[phase]}</small></> : <><strong>把成片放到这里</strong><small>MP4 / MOV 优先 · WebM仅录制兜底 · ≤ 300 秒 · ≤ 300MB</small></>}
+              {file ? <><strong>{file.name}</strong><small>{(file.size / 1024 / 1024).toFixed(1)} MB · {phase === "idle" ? consent ? "即将开始" : "请勾选使用授权" : PHASE_COPY[phase]}</small></> : <><strong>选择视频，或拖到这里</strong><small>MP4 / MOV / WebM · 最长 300 秒 · 最大 300 MB</small></>}
             </button>
             <div className="drop-rule" />
             {captureWarning && <p className="capture-warning">{captureWarning}</p>}
-            <label className="consent"><input type="checkbox" checked={consent} onChange={(event) => handleConsentChange(event.target.checked)} /><span>我拥有该素材的分析权利，并同意临时上传到私有 OSS 与阿里云百炼分析</span></label>
-            {phase === "error" && <button className="primary" disabled={!file || !consent} onClick={() => void runAnalysis()}>重试自动分析 →</button>}
+            <label className="consent"><input type="checkbox" checked={consent} onChange={(event) => handleConsentChange(event.target.checked)} /><span>我有权使用这段视频，并同意为完成分析临时上传。视频不会长期保存。</span></label>
+            {phase === "error" && <button className="primary" disabled={!file || !consent} onClick={() => void runAnalysis()}>重新分析 →</button>}
           </div>}
 
           {phase !== "idle" && phase !== "ready" && <div className="progress-wrap" role="status" aria-live="polite"><div><span>{PHASE_COPY[phase]}</span><b>{progress}%</b></div><div className="progress-track"><i style={{ width: `${progress}%` }} /></div>{!["error"].includes(phase) && <button onClick={() => abortRef.current?.abort()}>取消</button>}</div>}
           {error && <div className="error-box"><b>没有继续分析</b><span>{error}</span><button onClick={reset}>重新开始</button></div>}
-          <div className="demo-line"><span>{inputMode === "link" ? "只想看完整分析台？" : "没有素材或 API 额度？"}</span><button onClick={inputMode === "link" ? loadLinkDemo : loadDemo}>{inputMode === "link" ? "打开链接分析演示" : "打开 20.8 秒合成样片"}</button></div>
+          <div className="demo-line"><span>还没想好拆哪条？</span><button onClick={inputMode === "link" ? loadLinkDemo : loadDemo}>先看一份完整结果</button></div>
         </div>
       </section>
 
       <section className="proof-strip" id="how">
-        <div><b>4 FPS</b><span>本机画面采样</span></div><div><b>±0.5s</b><span>切点匹配容差</span></div><div><b>4 层</b><span>镜头 / 叙事 / 参数 / 模板</span></div><div><b>0</b><span>长期保存的视频</span></div>
+        <div><b>不只说“节奏好”</b><span>具体看到每个镜头</span></div><div><b>不靠感觉猜</b><span>判断可以回看依据</span></div><div><b>不照搬原片</b><span>只带走结构和方法</span></div><div><b>不止看完就算</b><span>整理成能修改的方案</span></div>
       </section>
 
       {linkAnalysis && <LinkAnalysisDesk report={linkAnalysis} fixture={linkFixture} />}
 
       {analysis ? <section className="studio" id="result">
         <div className="studio-head">
-          <div><p className="eyebrow">ANALYSIS DESK / 分析台</p><h2>{analysis.metadata.title}</h2><p>{analysis.narrative.logline}</p></div>
-          <div className="actions"><button onClick={() => setEditing((value) => !value)}>{editing ? "完成编辑" : "编辑模板"}</button><button onClick={() => exportResult("json")}>JSON</button><button onClick={() => exportResult("md")}>Markdown</button><button onClick={() => exportResult("csv")}>CSV</button></div>
+          <div><h2>{analysis.metadata.title}</h2><p>{analysis.narrative.logline}</p></div>
+          <div className="actions"><button onClick={() => setEditing((value) => !value)}>{editing ? "保存修改" : "修改创作清单"}</button><button onClick={() => exportResult("json")}>导出 JSON</button><button onClick={() => exportResult("md")}>导出文档</button><button onClick={() => exportResult("csv")}>导出表格</button></div>
         </div>
 
         <div className="viewer-grid">
@@ -765,38 +782,38 @@ export default function ShotprintStudio() {
             {videoUrl && !isDemo ? <video ref={videoRef} src={videoUrl} controls onTimeUpdate={(event) => setPlayhead(event.currentTarget.currentTime * 1000)} /> : <button className="demo-video" style={demoFrame} onClick={() => setPlaying((value) => !value)} aria-label={playing ? "暂停演示样片" : "播放演示样片"}><span className="scene-index">SCENE {String(activeShot + 1).padStart(2, "0")}</span><span className="demo-figure" /><b>{currentShot?.transcript || currentShot?.action}</b><i>{playing ? "Ⅱ" : "▶"}</i></button>}
             <div className="timecode"><span>{formatTime(playhead)}</span><span>{formatTime(duration)}</span></div>
           </div>
-          <aside className="shot-inspector"><span className="mono">CURRENT SHOT</span><b>{String(activeShot + 1).padStart(2, "0")}</b><h3>{currentShot?.narrativeFunction}</h3><p>{currentShot?.action}</p><dl><div><dt>景别</dt><dd>{currentShot?.shotSize}</dd></div><div><dt>运动</dt><dd>{currentShot?.motion}</dd></div><div><dt>判断</dt><dd>{Math.round((currentShot?.confidence || 0) * 100)}%</dd></div></dl><span className={`boundary ${currentShot?.localBoundary ? "matched" : ""}`}>{currentShot?.localBoundary ? "● 本机切点吻合" : "○ 仅模型判断"}</span></aside>
+          <aside className="shot-inspector"><span className="mono">当前镜头</span><b>{String(activeShot + 1).padStart(2, "0")}</b><h3>{currentShot?.narrativeFunction}</h3><p>{currentShot?.action}</p><dl><div><dt>景别</dt><dd>{currentShot?.shotSize}</dd></div><div><dt>运动</dt><dd>{currentShot?.motion}</dd></div><div><dt>把握</dt><dd>{Math.round((currentShot?.confidence || 0) * 100)}%</dd></div></dl><span className={`boundary ${currentShot?.localBoundary ? "matched" : ""}`}>{currentShot?.localBoundary ? "● 转场已确认" : "○ AI 判断，请复核"}</span></aside>
         </div>
 
         <div className="timeline" aria-label="镜头时间轴">{analysis.shots.map((shot, index) => <button key={shot.id} className={index === activeShot ? "active" : ""} style={{ flexGrow: shot.endMs - shot.startMs }} onClick={() => seek(index)}><span>{String(index + 1).padStart(2, "0")}</span><i style={{ background: `linear-gradient(135deg, ${displayPalette(shot.palette).join(",")})` }} /></button>)}</div>
 
-        <div className="tabs" role="tablist">{tabs.map((item) => <button key={item.id} role="tab" aria-selected={tab === item.id} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)}>{item.label}{item.count ? <sup>{item.count}</sup> : null}</button>)}</div>
+        <div className="tabs" role="tablist" aria-label="分析结果视图">{tabs.map((item) => <button id={`result-${item.id}-tab`} data-tab={item.id} key={item.id} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`result-${item.id}-panel`} tabIndex={tab === item.id ? 0 : -1} className={tab === item.id ? "active" : ""} onClick={() => setTab(item.id)} onKeyDown={(event) => moveTabFocus(event, tabs.map((entry) => entry.id), tab, setTab)}>{item.label}{item.count ? <sup>{item.count}</sup> : null}</button>)}</div>
 
-        <div className="tab-panel">
+        <div className="tab-panel" id={`result-${tab}-panel`} role="tabpanel" aria-labelledby={`result-${tab}-tab`}>
           {tab === "shots" && <div className="shot-list">{analysis.shots.map((shot, index) => <button key={shot.id} onClick={() => seek(index)} className={index === activeShot ? "active" : ""}><span className="shot-no">{String(index + 1).padStart(2, "0")}</span><span className="shot-thumb" style={{ background: `linear-gradient(135deg, ${displayPalette(shot.palette).join(",")})` }} /><span className="shot-copy"><b>{shot.narrativeFunction}</b><small>{shot.action}</small></span><span className="shot-tech"><b>{formatTime(shot.startMs)} → {formatTime(shot.endMs)}</b><small>{shot.shotSize} · {shot.camera} · {shot.motion}</small></span><span className="confidence">{Math.round(shot.confidence * 100)}%</span></button>)}</div>}
           {tab === "narrative" && <NarrativePanel analysis={analysis} />}
           {tab === "production" && <ProductionPanel analysis={analysis} />}
           {tab === "template" && <TemplatePanel analysis={analysis} editing={editing} update={updateTemplate} />}
         </div>
 
-        <div className="warning-band"><span>判断边界</span><p>{analysis.warnings.join(" · ")}</p><b>{analysis.provenance.model}</b></div>
-      </section> : !linkAnalysis && <section className="empty-blueprint"><span className="big-number">04</span><div><p className="eyebrow">OUTPUT / 输出结构</p><h2>不是一份“看起来很懂”的总结。</h2><p>每个判断都回到时间码、画面证据和置信度。不能从成片恢复的参数，镜谱会直接说不知道。</p></div><ol><li>逐镜拆解</li><li>叙事曲线</li><li>生产假设</li><li>复用模板</li></ol></section>}
+        <div className="warning-band"><span>需要留意</span><p>{analysis.warnings.join(" · ")}</p><b>{analysis.provenance.model}</b></div>
+      </section> : !linkAnalysis && <section className="empty-blueprint"><div><h2>你收藏的是视频，镜谱拆出来的是方法。</h2><p>一条视频拆完，不只知道它哪里好看，还知道观众在意什么、开头怎样抓人、节奏如何推进，以及换成你的题材可以怎么拍。</p></div><ol><li>大家为什么愿意看下去</li><li>哪些镜头真正起作用</li><li>拍摄和剪辑怎么落地</li><li>怎样借方法而不照搬</li></ol></section>}
 
-      <footer><div className="wordmark"><span className="mark">镜</span><span>镜谱 <i>SHOTPRINT</i></span></div><p>复刻结构，不复制身份。所有生产参数均为证据化推测。</p><button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>回到片头 ↑</button></footer>
+      <footer><div className="wordmark"><span className="mark">镜</span><span>镜谱 <i>SHOTPRINT</i></span></div><p>好内容可以学，人物、台词和画面不必复制。镜谱只帮你带走真正有用的方法。</p><button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>拆一条视频 ↑</button></footer>
     </main>
   );
 }
 
 function NarrativePanel({ analysis }: { analysis: AnalysisResult }) {
   const items = [["钩子", analysis.narrative.hook], ["冲突", analysis.narrative.conflict], ["升级", analysis.narrative.escalation], ["反转", analysis.narrative.reversal], ["高潮", analysis.narrative.climax], ["收束", analysis.narrative.resolution]];
-  return <div className="narrative-grid"><div className="curve-card"><div className="curve-head"><span>情绪张力 / 0–100</span><b>平均镜长 {analysis.narrative.stats.averageShotSeconds}s</b></div><div className="curve" aria-label="叙事情绪曲线">{analysis.narrative.pace.map((point, index) => <div key={point.label} style={{ height: `${point.intensity}%` }}><i /><span>{point.label}</span><small>{Math.round(point.timeMs / 1000)}s</small>{index < analysis.narrative.pace.length - 1 && <em />}</div>)}</div></div><div className="beat-list">{items.map(([label, value], index) => <div key={label}><span>{String(index + 1).padStart(2, "0")}</span><p><b>{label}</b>{value}</p></div>)}</div></div>;
+  return <div className="narrative-grid"><div className="curve-card"><div className="curve-head"><span>节奏变化</span><b>平均每镜 {analysis.narrative.stats.averageShotSeconds} 秒</b></div><div className="curve" aria-label="故事节奏曲线">{analysis.narrative.pace.map((point, index) => <div key={point.label} style={{ height: `${point.intensity}%` }}><i /><span>{point.label}</span><small>{Math.round(point.timeMs / 1000)}s</small>{index < analysis.narrative.pace.length - 1 && <em />}</div>)}</div></div><div className="beat-list">{items.map(([label, value], index) => <div key={label}><span>{String(index + 1).padStart(2, "0")}</span><p><b>{label}</b>{value}</p></div>)}</div></div>;
 }
 
 function ProductionPanel({ analysis }: { analysis: AnalysisResult }) {
-  return <div className="hypothesis-grid">{analysis.productionHypotheses.map((item, index) => <article key={item.category}><div><span>HYPOTHESIS {String(index + 1).padStart(2, "0")}</span><b>{Math.round(item.confidence * 100)}%</b></div><h3>{item.category}</h3><p>{item.estimate}</p><small><b>画面证据</b>{item.evidence}</small><i style={{ width: `${item.confidence * 100}%` }} /></article>)}</div>;
+  return <div className="hypothesis-grid">{analysis.productionHypotheses.map((item, index) => <article key={item.category}><div><span>参考 {String(index + 1).padStart(2, "0")}</span><b>{Math.round(item.confidence * 100)}%</b></div><h3>{item.category}</h3><p>{item.estimate}</p><small><b>判断依据</b>{item.evidence}</small><i style={{ width: `${item.confidence * 100}%` }} /></article>)}</div>;
 }
 
 function TemplatePanel({ analysis, editing, update }: { analysis: AnalysisResult; editing: boolean; update: (key: keyof AnalysisResult["reusableTemplate"], value: string) => void }) {
-  const sections: Array<[keyof AnalysisResult["reusableTemplate"], string, string]> = [["storyVariables", "故事变量", "把原片身份换成你自己的世界"], ["beatSheet", "节拍表", "按占比复用，不照抄剧情"], ["globalVisualRules", "视觉圣经", "让跨镜头质感保持一致"], ["shotPrompts", "逐镜提示词骨架", "填空后交给视频模型"], ["negativeConstraints", "负面约束", "防止复刻越界和常见崩坏"], ["editAndSound", "剪辑与声音", "把节奏落到时间线上"]];
+  const sections: Array<[keyof AnalysisResult["reusableTemplate"], string, string]> = [["storyVariables", "故事元素", "替换人物、冲突和场景"], ["beatSheet", "分段脚本", "按时间安排每一段做什么"], ["globalVisualRules", "画面统一规则", "让前后镜头看起来属于同一条视频"], ["shotPrompts", "镜头提示词", "每个镜头需要生成什么"], ["negativeConstraints", "不要照搬", "避开原片人物、台词和标识"], ["editAndSound", "剪辑与声音", "什么时候切镜头、进音乐和音效"]];
   return <div className="template-grid">{sections.map(([key, title, hint], index) => <article key={key}><span className="template-index">T{String(index + 1).padStart(2, "0")}</span><div><h3>{title}</h3><small>{hint}</small></div>{editing ? <textarea aria-label={`编辑${title}`} value={analysis.reusableTemplate[key].join("\n")} onChange={(event) => update(key, event.target.value)} /> : <ul>{analysis.reusableTemplate[key].map((item) => <li key={item}>{item}</li>)}</ul>}</article>)}</div>;
 }

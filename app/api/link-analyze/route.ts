@@ -249,8 +249,8 @@ export async function POST(request: Request) {
   const sessionResearch = typeof body.researchSessionId === "string" && body.researchSessionId.length < 120
     ? await readResearchSession(runtime, body.researchSessionId)
     : null;
-  if (body.researchToken && !signedResearch) return jsonError("RESEARCH_TOKEN_INVALID：研究结果已过期或签名无效，请重新执行深度检索。", 409);
-  if (body.researchSessionId && !sessionResearch) return jsonError("RESEARCH_SESSION_EXPIRED：研究会话已超过60分钟或不存在，请重新执行深度检索。", 409);
+  if (body.researchToken && !signedResearch) return jsonError("查询结果已过期，请重新查找公开资料。", 409);
+  if (body.researchSessionId && !sessionResearch) return jsonError("查询结果已过期，请重新查找公开资料。", 409);
   const research = sessionResearch || signedResearch;
   const query = [platform, body.title, body.author, canonicalUrl.hostname, canonicalUrl.pathname].filter(Boolean).join(" ");
   const search = research ? { sources: research === sessionResearch ? sessionResearch!.sources : signedResearch!.bundle.sources, provider: "bailian-deep-research", status: research.receipt.status, warning: "", retrievedAt: research.receipt.retrievedAt } : await searchSources(runtime, query || canonicalUrl.toString());

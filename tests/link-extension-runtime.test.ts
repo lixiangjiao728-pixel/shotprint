@@ -136,5 +136,5 @@ test("homepage download payload is a valid v0.6.9 ZIP with a matching checksum",
   assert.equal(zip.length > 10000, true);
   assert.equal(createHash("sha256").update(zip).digest("hex"), expected.trim());
   assert.match(studio, /shotprint-extension-0\.6\.9\.zip\.b64/);
-  assert.match(studio, /下载0\.6\.9扩展/);
+  assert.match(studio, /下载扩展 \{EXTENSION_VERSION\}/);
 });

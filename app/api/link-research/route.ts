@@ -52,14 +52,14 @@ export async function POST(request: Request) {
   const contentLength = Number(request.headers.get("content-length") || 0);
   if (contentLength > 32_000) return jsonError("研究摘要请求超过32KB安全上限。", 413);
   let body: { url?: string; platform?: string; title?: string; author?: string; description?: string; videoId?: string; keywords?: string; commentEvidence?: unknown[]; audienceDigest?: unknown; commentReceipt?: CommentEvidenceReceipt };
-  try { body = await request.json(); } catch { return jsonError("深度研究参数不是有效JSON。", 400); }
+  try { body = await request.json(); } catch { return jsonError("提交的信息格式不正确，请刷新后重试。", 400); }
   if (!body.url || detectPlatform(body.url) === "unknown") return jsonError("请提供可识别的公开视频链接。", 415);
   const audienceDigest = normalizeAudienceDigest(body.audienceDigest);
-  if (!audienceDigest) return jsonError("深度研究至少需要一份有效的本地观众摘要。", 422);
+  if (!audienceDigest) return jsonError("还没有可用的评论摘要，请先读取评论。", 422);
   const commentEvidence = buildCommentEvidence(Array.isArray(body.commentEvidence) ? body.commentEvidence : []).comments;
   if (!commentEvidence.length || commentEvidence.some((comment) => !audienceDigest.evidenceIds.includes(comment.id))) return jsonError("匿名评论证据与观众摘要不一致，请重新采集。", 422);
   const originalCommentCount = audienceDigest.originalSampleCount;
-  if (!runtime.DASHSCOPE_API_KEY || (!runtime.DB && !runtime.STATE_STORE)) return jsonError("SEARCH_NOT_CONFIGURED：百炼深度研究尚未配置。", 503);
+  if (!runtime.DASHSCOPE_API_KEY || (!runtime.DB && !runtime.STATE_STORE)) return jsonError("公开资料查询暂不可用，请稍后重试。", 503);
   const researchRuntime = { ...runtime, DAILY_IP_LIMIT: runtime.RESEARCH_DAILY_IP_LIMIT || "10" };
   const rateLimit = await consumeRateLimit(request, researchRuntime, "link-research-v2");
   if (!rateLimit.ok) return jsonError(`SEARCH_RATE_LIMITED：${rateLimit.reason}`, 429);

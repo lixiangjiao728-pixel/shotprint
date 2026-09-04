@@ -1,0 +1,10 @@
+{
+  "scannedAt": "2026-09-02",
+  "fontStack": "System Chinese sans (Aptos / Microsoft YaHei UI / Noto Sans SC) with KaiTi display and Cascadia Code mono",
+  "palette": "Existing CSS custom properties in app/globals.css",
+  "motion": "motion-cut; no animation library dependency",
+  "spacing": "Existing handcrafted spacing; no formal token scale",
+  "framework": "Next.js 16.2.6 application running through Vinext",
+  "preserve": ["font stack", "palette", "page structure", "existing interactions"],
+  "scope": "Rewrite visible page copy and adjust layout only where new copy length requires it"
+}

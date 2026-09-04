@@ -9,17 +9,17 @@ export async function generateMetadata(): Promise<Metadata> {
   const metadataBase = new URL(`${protocol}://${host}`);
   return {
     title: "镜谱 Shotprint",
-    description: "AI 短片逐镜拆解与创作模板生成器",
+    description: "看懂观众反应，拆开镜头节奏，把值得借鉴的方法带进你的下一条内容。",
     metadataBase,
     openGraph: {
       title: "镜谱 Shotprint",
-      description: "从热议到镜头，逐帧有据。",
+      description: "别让爆款只躺在收藏夹。",
       images: [{ url: new URL("/og.png", metadataBase).toString(), width: 1737, height: 905 }],
     },
     twitter: {
       card: "summary_large_image",
       title: "镜谱 Shotprint",
-      description: "从热议到镜头，逐帧有据。",
+      description: "别让爆款只躺在收藏夹。",
       images: [new URL("/og.png", metadataBase).toString()],
     },
   };
