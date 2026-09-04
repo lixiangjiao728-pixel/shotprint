@@ -2,15 +2,15 @@
 
 > 别让爆款，只躺在收藏夹。
 
-[![在线体验](https://img.shields.io/badge/在线体验-shotprint.xyz-C9684F?style=for-the-badge)](https://shotprint.xyz)
-[![视频上限](https://img.shields.io/badge/视频分析-最长%20300%20秒-18312D?style=for-the-badge)](https://shotprint.xyz)
+[![在线体验](https://img.shields.io/badge/在线体验-Shotprint-C9684F?style=for-the-badge)](https://shotprint-ai-film.lixiangjia27.chatgpt.site)
+[![视频上限](https://img.shields.io/badge/视频分析-最长%20300%20秒-18312D?style=for-the-badge)](https://shotprint-ai-film.lixiangjia27.chatgpt.site)
 [![Evidence First](https://img.shields.io/badge/AI%20原则-Evidence%20First-297A68?style=for-the-badge)](#核心产品判断)
 
 ![镜谱 Shotprint 视频拆解产品](./public/og.png)
 
 镜谱是一款面向短视频创作者与内容团队的视频拆解产品。它把公开视频、匿名评论、公开资料与真实视频依据放在一起，帮助创作者看清观众在意什么、镜头怎样推进，并整理成可以修改和执行的原创创作方案。
 
-**在线体验：[https://shotprint.xyz](https://shotprint.xyz)**
+**在线体验：[https://shotprint-ai-film.lixiangjia27.chatgpt.site](https://shotprint-ai-film.lixiangjia27.chatgpt.site)**
 
 ## 为什么做镜谱
 
