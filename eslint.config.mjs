@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "**/build/**",
+    "outputs/**", // Browser profiles and verification output, never source.
     "next-env.d.ts",
   ]),
 ]);

@@ -2,15 +2,15 @@
 
 > 别让爆款，只躺在收藏夹。
 
-[![在线体验](https://img.shields.io/badge/在线体验-Shotprint-C9684F?style=for-the-badge)](https://shotprint-ai-film.lixiangjia27.chatgpt.site)
-[![视频上限](https://img.shields.io/badge/视频分析-最长%20300%20秒-18312D?style=for-the-badge)](https://shotprint-ai-film.lixiangjia27.chatgpt.site)
+[![在线体验](https://img.shields.io/badge/在线体验-Shotprint-C9684F?style=for-the-badge)](https://shotprint.xyz)
+[![视频上限](https://img.shields.io/badge/视频分析-最长%20300%20秒-18312D?style=for-the-badge)](https://shotprint.xyz)
 [![Evidence First](https://img.shields.io/badge/AI%20原则-Evidence%20First-297A68?style=for-the-badge)](#核心产品判断)
 
 ![镜谱 Shotprint 视频拆解产品](./public/og.png)
 
 镜谱是一款面向短视频创作者与内容团队的视频拆解产品。它把公开视频、匿名评论、公开资料与真实视频依据放在一起，帮助创作者看清观众在意什么、镜头怎样推进，并整理成可以修改和执行的原创创作方案。
 
-**在线体验：[https://shotprint-ai-film.lixiangjia27.chatgpt.site](https://shotprint-ai-film.lixiangjia27.chatgpt.site)**
+**在线体验：[shotprint.xyz](https://shotprint.xyz)**。生产更新沿用原 Cloudflare 项目，不迁移到 Sites。
 
 ## 为什么做镜谱
 
@@ -27,6 +27,8 @@
 ### 1. 从公开视频还原传播语境
 
 粘贴抖音、B 站或小红书链接后，浏览器扩展在用户主动触发时采集最多 200 条去标识化评论，并保留作品标题、作者、作品 ID 与规范链接。系统围绕原视频与转载、作者背景、传播时间线、社会议题、支持与批评、AI 制作、平台传播、媒体行业八类主题进行联网研究。
+
+0.7.1 流程支持整段分享文本、多链接选择、作品身份绑定和可访问 MP4 读取；不能获取完整音视频时保留评论，提供用户确认的标签页录制或原片上传入口，不再要求外部下载网站。平台登录或验证仍由用户在原页面完成；验证边界见运维文档。
 
 ### 2. 从真实视频建立视听证据
 
@@ -72,7 +74,7 @@ flowchart LR
 
 | 层级 | 主要职责 |
 |---|---|
-| Sites / React 主站 | 双入口、任务状态、报告阅读与导出 |
+| Cloudflare / React 主站 | 双入口、任务状态、报告阅读与导出 |
 | 阿里云函数 | 联网研究、上传会话、异步视听分析、证据融合 |
 | 百炼 Qwen | 原始视听取证与结构化整理 |
 | 私有 OSS | 短时视频直传、任务回执与临时状态 |
@@ -92,7 +94,7 @@ flowchart LR
 
 ## 技术栈
 
-`React 19` · `Next.js 16` · `TypeScript 5.9` · `vinext` · `Cloudflare Sites / D1` · `阿里云函数计算` · `OSS` · `百炼 Qwen Omni` · `Manifest V3` · `Zod` · `Drizzle ORM`
+`React 19` · `Next.js 16` · `TypeScript 5.9` · `vinext` · `Cloudflare / D1` · `阿里云函数计算` · `OSS` · `百炼 Qwen Omni` · `Manifest V3` · `Zod` · `Drizzle ORM`
 
 ## 本地运行
 

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import ShotprintStudio from "./ShotprintStudio";
 
 export const metadata: Metadata = {
-  title: "镜谱 Shotprint — 别让爆款只躺在收藏夹",
-  description: "粘贴一条视频链接，看懂观众反应，拆开镜头节奏，把值得借鉴的方法带进你的下一条内容。",
+  title: "镜谱 Shotprint — 别抄爆款，拆懂它",
+  description: "粘贴一条视频链接，看清观众为什么愿意看下去，找出真正起作用的镜头和节奏。",
 };
 
 export default function Home() {

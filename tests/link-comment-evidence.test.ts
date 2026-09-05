@@ -48,6 +48,14 @@ test("deep research request includes only bounded de-identified comment evidence
   assert.ok(normalizeAudienceDigest(request.body.audienceDigest));
 });
 
+test("an identified work can continue public research when comments are unavailable", () => {
+  const request = buildResearchRequest({ url: "https://www.douyin.com/video/7650427585301630208", platform: "douyin", title: "作品", comments: [] });
+  const digest = normalizeAudienceDigest(request.body.audienceDigest);
+  assert.ok(digest);
+  assert.deepEqual(digest.evidenceIds, []);
+  assert.equal(request.body.commentEvidence.length, 0);
+});
+
 test("browser-local merge restores anonymous comments without sending them through the edge", () => {
   const base = buildLinkAnalysis({
     url: "https://www.douyin.com/video/123",

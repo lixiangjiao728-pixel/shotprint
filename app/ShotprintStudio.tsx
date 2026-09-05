@@ -8,6 +8,8 @@ import { detectPlatform, mergeLocalAudienceEvidence, type LinkAnalysis, type Sup
 import { demoLinkAnalysis } from "../lib/link-demo-data";
 import { buildResearchRequest, readSafeApiError, readSafeApiJson } from "../lib/comment-evidence";
 import { compareExtensionVersions, extensionCompatibility } from "../lib/extension-version";
+import { shareLinks } from "../lib/share-link";
+import { mp4Tracks } from "../lib/mp4-tracks";
 
 type Phase = "idle" | "reading" | "detecting" | "uploading" | "analyzing" | "ready" | "error";
 type Tab = "shots" | "narrative" | "production" | "template";
@@ -15,9 +17,10 @@ type InputMode = "link" | "video";
 type LinkPhase = "idle" | "collecting" | "comments-ready" | "continuing" | "researching" | "cross-checking" | "analyzing" | "awaiting-video" | "recording" | "ready" | "error";
 type BridgeStatus = "checking" | "ready" | "missing" | "old";
 type SearchStatus = "checking" | "configured" | "disabled";
-type BackendStatus = "checking" | "aliyun" | "fallback";
+type BackendStatus = "checking" | "aliyun" | "fallback" | "unavailable";
 type BridgeDiagnostics = { version?: string; bridge?: string; permissions?: Record<string, boolean>; activeJobs?: number; platform?: string; stage?: string; errorCode?: string; requestId?: string; companion?: { ok?: boolean; version?: string; browserAct?: string; chromeDirect?: boolean; paired?: boolean; code?: string; platformStatus?: Partial<Record<SupportedPlatform, string>> } };
 type LinkPayload = {
+  commentStatus?: "unavailable" | "empty";
   url: string; platform?: SupportedPlatform; title?: string; author?: string; description?: string; videoId?: string; keywords?: string; publishedAt?: string; coverUrl?: string;
   comments: unknown[]; warnings?: string[]; collectedAt?: string; collectionId?: string; targetCount?: number;
   engine?: "extension-api" | "extension-dom" | "browser-act-network" | "browser-act-dom"; strategyVersion?: string; sampleCount?: number; pageCount?: number; cursorCount?: number;
@@ -25,7 +28,7 @@ type LinkPayload = {
 };
 type VideoPageEvidence = { title: string; durationMs: number; width: number; height: number; playerReady: boolean; muted: boolean; sharedAudioDetected: boolean | null; captions?: string };
 type ResearchProgress = { category?: string; completedQueries: number; totalQueries: number; sourceCount: number; domainCount: number; costCny?: number; message?: string };
-const EXTENSION_VERSION = "0.6.9";
+const EXTENSION_VERSION = "0.7.1";
 const MAX_VIDEO_DURATION_SECONDS = 300;
 const MAX_VIDEO_DURATION_MS = MAX_VIDEO_DURATION_SECONDS * 1000;
 const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
@@ -78,13 +81,13 @@ function joinApi(base: string, path: string) {
 }
 
 async function downloadExtensionPackage() {
-  const response = await fetch("/shotprint-extension-0.6.9.zip.b64", { cache: "no-store" });
+  const response = await fetch("/shotprint-extension-0.7.1.zip.b64", { cache: "no-store" });
   if (!response.ok) throw new Error("扩展安装包下载失败");
   const binary = atob((await response.text()).trim());
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
   const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
   const anchor = document.createElement("a");
-  anchor.href = url; anchor.download = "shotprint-extension-0.6.9.zip"; anchor.click();
+  anchor.href = url; anchor.download = "shotprint-extension-0.7.1.zip"; anchor.click();
   URL.revokeObjectURL(url);
 }
 
@@ -182,6 +185,17 @@ export default function ShotprintStudio() {
   const [searchStatus, setSearchStatus] = useState<SearchStatus>("checking");
   const [apiBase, setApiBase] = useState("");
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("checking");
+  const [backendRetry, setBackendRetry] = useState(0);
+  const [mediaStatus, setMediaStatus] = useState<"idle" | "fetching" | "ready" | "manual">("idle");
+  const [mediaNotice, setMediaNotice] = useState("");
+  const chainRef = useRef("");
+  const mediaChainRef = useRef("");
+  const researchChainRef = useRef("");
+  const mediaTokenRef = useRef("");
+  const researchBusyRef = useRef(false);
+  const researchControllerRef = useRef<AbortController | null>(null);
+  const researchJobRef = useRef<{ key: string; taskId?: string; jobId?: string; result?: { researchSessionId?: string; receipt?: ResearchProgress } }>({ key: "" });
+  const analysisReceiptRef = useRef<{ file: File | null; taskId?: string; jobId?: string; result?: AnalysisResult }>({ file: null });
   const [diagnosticCopied, setDiagnosticCopied] = useState(false);
   const [linkStage, setLinkStage] = useState(0);
   const [researchSessionId, setResearchSessionId] = useState("");
@@ -216,7 +230,10 @@ export default function ShotprintStudio() {
 
   const duration = analysis?.metadata.durationMs ?? 20800;
   const currentShot = analysis?.shots[activeShot];
-  const apiUrl = useCallback((path: string) => joinApi(apiBase, path), [apiBase]);
+  const apiUrl = useCallback((path: string) => {
+    if (backendStatus === "checking" || backendStatus === "unavailable") throw new Error("分析服务暂时无法连接。评论和视频会保留，请恢复连接后继续。");
+    return joinApi(apiBase, path);
+  }, [apiBase, backendStatus]);
   const linkBusy = ["collecting", "continuing", "researching", "cross-checking", "recording"].includes(linkPhase);
   const extensionActionNeeded = bridgeStatus === "missing" || bridgeStatus === "old";
 
@@ -283,7 +300,7 @@ export default function ShotprintStudio() {
     if (event.data.type === "shotprint:error") { setBridgeDiagnostics((current) => ({ ...(current || {}), platform: String(event.data.platform || "unknown"), stage: String(event.data.step || "unknown"), errorCode: String(event.data.code || "EXTENSION_ERROR"), requestId: String(event.data.requestId || linkRequestRef.current) })); setLinkPhase("error"); setLinkError(String(event.data.userMessage || event.data.error || `${event.data.code || "EXTENSION_ERROR"}：扩展没有返回采集结果。`)); return; }
       const payload = event.data.payload as LinkPayload;
       if (!payload?.url) return;
-      if (!Array.isArray(payload.comments) || payload.comments.length === 0) {
+      if (!Array.isArray(payload.comments) || (payload.comments.length === 0 && !payload.commentStatus)) {
         setLinkAnalysis(null); setLinkPhase("error"); setLinkError(payload.warnings?.[0] || "视频已识别，但评论区尚未加载出可分析评论。请在原页确认评论可见后重试，或改用手动评论。"); return;
       }
       setPendingLinkPayload(payload); setResearchSessionId(""); setLinkAnalysis(null); setLinkStage(1); setLinkPhase("comments-ready"); setLinkError("");
@@ -296,21 +313,24 @@ export default function ShotprintStudio() {
 
   useEffect(() => {
     void fetch("/api/link-analyze", { cache: "no-store" }).then(async (response) => {
+      if (!response.ok) throw new Error("BACKEND_CONFIGURATION_UNAVAILABLE");
       const payload = await response.json() as { search?: { status?: string }; backend?: { apiBase?: string } };
       const external = payload.backend?.apiBase?.trim() || "";
+      setApiBase(external);
       if (!external) {
         setBackendStatus("fallback");
         setSearchStatus(payload.search?.status === "configured" ? "configured" : "disabled");
         return;
       }
-      const health = await fetch(joinApi(external, "/health"), { cache: "no-store" });
+      const health = await fetch(joinApi(external, "/health"), { cache: "no-store", signal: AbortSignal.timeout(10000) });
       if (!health.ok) throw new Error("ALIYUN_BACKEND_UNAVAILABLE");
-      const externalStatus = await fetch(joinApi(external, "/api/link-analyze"), { cache: "no-store" });
+      const externalStatus = await fetch(joinApi(external, "/api/link-analyze"), { cache: "no-store", signal: AbortSignal.timeout(10000) });
+      if (!externalStatus.ok) throw new Error("ALIYUN_BACKEND_UNAVAILABLE");
       const externalPayload = await externalStatus.json() as { search?: { status?: string } };
       setApiBase(external); setBackendStatus("aliyun");
       setSearchStatus(externalPayload.search?.status === "configured" ? "configured" : "disabled");
-    }).catch(() => { setBackendStatus("fallback"); setSearchStatus("disabled"); });
-  }, []);
+    }).catch(() => { setBackendStatus("unavailable"); setSearchStatus("disabled"); });
+  }, [backendRetry]);
 
   useEffect(() => {
     if (!isDemo || !playing || !analysis) return;
@@ -333,6 +353,9 @@ export default function ShotprintStudio() {
   }, [activeShot, analysis, playhead]);
 
   const reset = useCallback(() => {
+    chainRef.current = ""; mediaChainRef.current = ""; researchChainRef.current = ""; mediaTokenRef.current = "";
+    researchControllerRef.current?.abort();
+    setMediaStatus("idle"); setMediaNotice("");
     abortRef.current?.abort();
     if (linkTimerRef.current) window.clearTimeout(linkTimerRef.current);
     collectionRetryRef.current = 0; terminalReceiptsRef.current.clear();
@@ -362,11 +385,21 @@ export default function ShotprintStudio() {
     }
   }, [bridgeDiagnostics, linkPhase, linkPlatform]);
 
-  const handleLinkChange = (value: string) => { setLink(value); setLinkPlatform(value.trim() ? detectPlatform(value.trim()) : "unknown"); setLinkError(""); if (linkPhase === "error") setLinkPhase("idle"); };
+  const handleLinkChange = (value: string) => {
+    if (linkBusy || mediaStatus === "fetching" || analysisRunRef.current) return;
+    const candidates = shareLinks(value);
+    const selected = candidates.length === 1 ? candidates[0] : value;
+    setLink(selected); setLinkPlatform(candidates.length === 1 ? detectPlatform(selected) : "unknown");
+    chainRef.current = ""; mediaChainRef.current = ""; researchChainRef.current = ""; linkRequestRef.current = "";
+    if (videoUrl) URL.revokeObjectURL(videoUrl);
+    setFile(null); setVideoUrl(""); setAnalysis(null); setPhase("idle");
+    setPendingLinkPayload(null); setResearchSessionId(""); setLinkAnalysis(null); setMediaStatus("idle"); setMediaNotice("");
+    setLinkError(candidates.length > 1 ? "找到了多个视频链接，请选择一条。" : ""); setLinkPhase("idle");
+  };
 
-  const requestCompanion = useCallback((type: "shotprint:companion-health" | "shotprint:pair" | "shotprint:playback-prepare", payload: Record<string, unknown> = {}, timeoutMs = 15000) => new Promise<Record<string, unknown>>((resolve) => {
+  const requestCompanion = useCallback((type: "shotprint:media-read" | "shotprint:companion-health" | "shotprint:pair" | "shotprint:playback-prepare", payload: Record<string, unknown> = {}, timeoutMs = 15000) => new Promise<Record<string, unknown>>((resolve) => {
     const requestId = crypto.randomUUID();
-    const timer = window.setTimeout(() => { companionWaitersRef.current.delete(requestId); resolve({ ok: false, code: "COMPANION_NOT_RUNNING" }); }, timeoutMs);
+    const timer = window.setTimeout(() => { companionWaitersRef.current.delete(requestId); resolve({ ok: false, code: type === "shotprint:media-read" ? "VIDEO_BRIDGE_TIMEOUT" : "COMPANION_NOT_RUNNING" }); }, timeoutMs);
     companionWaitersRef.current.set(requestId, (response) => { window.clearTimeout(timer); resolve(response); });
     window.postMessage({ type, requestId, ...payload }, "*");
   }), []);
@@ -380,10 +413,13 @@ export default function ShotprintStudio() {
   }, [pairingCode, requestCompanion]);
 
   const runLinkCollection = () => {
+    if (!consent) { setLinkError("请先确认可以分析此视频。"); return; }
     if (!link.trim()) { setLinkPhase("error"); setLinkError("先粘贴一个抖音、B站或小红书链接。"); return; }
     if (linkPlatform === "unknown") { setLinkPhase("error"); setLinkError("暂不识别这个平台，请粘贴完整的原视频链接。"); return; }
     if (bridgeStatus === "old") { setLinkPhase("error"); setLinkError(`检测到旧版扩展，请在扩展管理页重新加载 ${EXTENSION_VERSION}，然后刷新本网页。`); return; }
     if (bridgeStatus !== "ready") { setLinkPhase("error"); setLinkError(`没有检测到浏览器扩展。请在扩展管理页重新加载 ${EXTENSION_VERSION}，然后刷新本页。`); return; }
+    chainRef.current = ""; mediaChainRef.current = ""; researchChainRef.current = "";
+    setFile(null); setVideoUrl(""); setAnalysis(null); setPhase("idle"); setResearchSessionId(""); setMediaStatus("idle"); setMediaNotice("");
     if (linkTimerRef.current) window.clearTimeout(linkTimerRef.current);
     collectionRetryRef.current = 0;
     const requestId = crypto.randomUUID(); linkRequestRef.current = requestId; linkCollectionModeRef.current = "initial";
@@ -404,22 +440,32 @@ export default function ShotprintStudio() {
     armCollectionWatchdog(requestId, COLLECTION_STALL_WATCHDOG_MS);
   };
 
-  const runDeepResearch = async () => {
+  const runDeepResearch = useCallback(async () => {
     const payload = pendingLinkPayload;
-    if (!payload?.comments.length) { setLinkPhase("error"); setLinkError("还没有读到评论，请先读取评论。"); return; }
+    if (!payload) { setLinkPhase("error"); setLinkError("还没有识别视频，请先粘贴链接。"); return; }
+    if (researchBusyRef.current) return;
+    researchBusyRef.current = true;
+    const controller = new AbortController(); researchControllerRef.current = controller;
+    const key = payload.collectionId || payload.url;
+    if (researchJobRef.current.key !== key) researchJobRef.current = { key, taskId: crypto.randomUUID() };
+    const receiptCache = researchJobRef.current;
+    receiptCache.taskId ||= crypto.randomUUID();
     setLinkPhase("researching"); setLinkStage(2); setLinkError(""); setLinkAnalysis(null);
     setResearchProgress({ completedQueries: 0, totalQueries: 8, sourceCount: 0, domainCount: 0 });
     try {
       const { evidence, digest, body } = buildResearchRequest(payload);
-      let response = await fetch(apiUrl("/api/link-research"), { method: "POST", headers: { "content-type": "application/json; charset=utf-8", "x-shotprint-contract": digest.contract }, body: JSON.stringify(body) });
+      let response = receiptCache.result ? Response.json(receiptCache.result) : receiptCache.jobId
+        ? await fetch(apiUrl(`/api/link-research/jobs/${encodeURIComponent(receiptCache.jobId)}`), { signal: controller.signal, cache: "no-store" })
+        : await fetch(apiUrl("/api/link-research"), { method: "POST", signal: controller.signal, headers: { "content-type": "application/json; charset=utf-8", "x-shotprint-contract": digest.contract, "x-shotprint-task-id": receiptCache.taskId }, body: JSON.stringify(body) });
       if (response.status === 202 && response.headers.get("content-type")?.includes("application/json")) {
-        const accepted = await response.json() as { researchJobId?: string; pollAfterMs?: number };
+        const accepted = receiptCache.jobId ? { researchJobId: receiptCache.jobId, pollAfterMs: 2000 } : await response.json() as { researchJobId?: string; pollAfterMs?: number };
         if (!accepted.researchJobId) throw new Error("公开资料查询没有正常开始，请重试。");
+        receiptCache.jobId = accepted.researchJobId;
         const deadline = Date.now() + 8 * 60 * 1000;
         let pollDelay = Math.max(1000, Math.min(5000, Number(accepted.pollAfterMs) || 2000));
         while (Date.now() < deadline) {
           await new Promise((resolve) => setTimeout(resolve, pollDelay));
-          response = await fetch(apiUrl(`/api/link-research/jobs/${encodeURIComponent(accepted.researchJobId)}`), { headers: { "x-shotprint-contract": digest.contract } });
+          response = await fetch(apiUrl(`/api/link-research/jobs/${encodeURIComponent(accepted.researchJobId)}`), { signal: controller.signal, headers: { "x-shotprint-contract": digest.contract } });
           if (response.status !== 202) break;
           setResearchProgress((current) => ({ ...current, stage: "deep-search" }));
           pollDelay = Math.min(5000, Math.round(pollDelay * 1.15));
@@ -430,7 +476,10 @@ export default function ShotprintStudio() {
       let finalResult: { researchSessionId?: string; receipt?: ResearchProgress } | null = null;
       if (contentType.includes("application/json")) {
         const data = await response.json() as { status?: string; researchSessionId?: string; receipt?: ResearchProgress; errorCode?: string; userMessage?: string };
-        if (!response.ok || data.status === "failed") throw new Error(`${data.errorCode || "SEARCH_PROVIDER_ERROR"}：${data.userMessage || "公开资料查询失败"}`);
+        if (!response.ok || data.status === "failed") {
+          if (data.status === "failed") receiptCache.jobId = undefined;
+          throw new Error(`${data.errorCode || "SEARCH_PROVIDER_ERROR"}：${data.userMessage || "公开资料查询失败"}`);
+        }
         finalResult = data;
         setLinkPhase("cross-checking"); setLinkStage(3);
       } else {
@@ -454,16 +503,62 @@ export default function ShotprintStudio() {
         }
       }
       if (!finalResult?.researchSessionId) throw new Error("公开资料查询没有返回结果，请重试。");
+      controller.signal.throwIfAborted();
+      receiptCache.result = finalResult;
       setResearchSessionId(finalResult.researchSessionId); if (finalResult.receipt) setResearchProgress((current) => ({ ...current, ...finalResult!.receipt }));
       const collectionDetails = { engine: payload.engine, strategyVersion: payload.strategyVersion, sampleCount: evidence.receipt.originalSampleCount, evidenceSampleCount: evidence.receipt.evidenceSampleCount, targetCount: payload.targetCount, pageCount: payload.pageCount, cursorCount: payload.cursorCount, scrollActions: payload.scrollActions, durationMs: payload.durationMs, stopReason: payload.stopReason, continuationAvailable: payload.continuationAvailable, sortMode: payload.sortMode };
       const linkResponse = await fetch(apiUrl("/api/link-analyze"), { method: "POST", headers: { "content-type": "application/json", "x-shotprint-contract": digest.contract }, body: JSON.stringify({ url: payload.url, platform: payload.platform, title: payload.title, author: payload.author, description: payload.description, videoId: payload.videoId, publishedAt: payload.publishedAt, coverUrl: payload.coverUrl, method: payload.collectionId ? "extension" : "manual", researchSessionId: finalResult.researchSessionId, collectionDetails }) });
       if (!linkResponse.ok) throw new Error(await readSafeApiError(linkResponse, "评论和公开资料没有合并成功"));
       const linkData = await linkResponse.json() as { result?: LinkAnalysis; error?: string };
+      controller.signal.throwIfAborted();
       if (!linkData.result) throw new Error(linkData.error || "评论和公开资料没有合并成功。");
       setLinkAnalysis(mergeLocalAudienceEvidence(linkData.result, evidence.comments, payload.collectionId ? "extension" : "manual", collectionDetails)); setLinkFixture(false); setLinkPhase("awaiting-video"); setLinkStage(4);
       window.setTimeout(() => document.getElementById("link-result")?.scrollIntoView({ behavior: "smooth" }), 50);
-    } catch (caught) { setLinkPhase("error"); setLinkError(caught instanceof Error ? caught.message : "公开资料查询中断了，请重试。"); }
-  };
+    } catch (caught) { if (!controller.signal.aborted) { setLinkPhase("error"); setLinkError(caught instanceof Error ? caught.message : "公开资料查询中断了，请重试。"); } }
+    finally { researchBusyRef.current = false; }
+  }, [pendingLinkPayload, apiUrl]);
+
+  const acquireLinkVideo = useCallback(async (payload: LinkPayload) => {
+    const token = crypto.randomUUID(); mediaTokenRef.current = token;
+    const identityRequest = linkRequestRef.current;
+    const ask = (action: string, offset?: number) => requestCompanion("shotprint:media-read", { action, offset, token, collectionId: payload.collectionId });
+    setMediaStatus("fetching"); setMediaNotice("正在读取原视频…");
+    try {
+      let state = await ask("begin");
+      const deadline = Date.now() + 120000;
+      while (state.ok && state.status === "pending" && Date.now() < deadline) {
+        if (mediaTokenRef.current !== token || identityRequest !== linkRequestRef.current) throw new Error("VIDEO_CANCELLED");
+        setMediaNotice(`正在读取原视频 · ${(Number(state.bytes || 0) / 1024 / 1024).toFixed(1)} MB`);
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        state = await ask("status");
+      }
+      if (!state.ok || state.status !== "ready") throw new Error(String(state.code || "VIDEO_DOWNLOAD_TIMEOUT"));
+      const size = Number(state.bytes);
+      if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_VIDEO_BYTES) throw new Error("VIDEO_SIZE_LIMIT");
+      const chunks: Uint8Array<ArrayBuffer>[] = [];
+      for (let offset = 0; offset < size; offset += 256 * 1024) {
+        if (mediaTokenRef.current !== token || identityRequest !== linkRequestRef.current) throw new Error("VIDEO_CANCELLED");
+        const chunk = await ask("chunk", offset);
+        if (!chunk.ok || chunk.offset !== offset || typeof chunk.data !== "string" || chunk.data.length > 350000) throw new Error(String(chunk.code || "VIDEO_CHUNK_INVALID"));
+        const bytes = Uint8Array.from(atob(chunk.data), (c) => c.charCodeAt(0));
+        if (bytes.length !== Math.min(256 * 1024, size - offset)) throw new Error("VIDEO_CHUNK_INVALID");
+        chunks.push(bytes);
+      }
+      const downloaded = new File(chunks, "source-video.mp4", { type: "video/mp4" });
+      const tracks = mp4Tracks(await downloaded.arrayBuffer());
+      if (!tracks.video || !tracks.audio) throw new Error("VIDEO_COMPLETE_AUDIO_REQUIRED");
+      const metadata = await createVideoMetadata(downloaded);
+      URL.revokeObjectURL(metadata.url);
+      if (!metadata.width || !metadata.height || metadata.durationMs > MAX_VIDEO_DURATION_MS || Math.abs(metadata.durationMs - Number(state.durationMs)) > 1500) throw new Error("VIDEO_DURATION_MISMATCH");
+      if (mediaTokenRef.current !== token || identityRequest !== linkRequestRef.current) throw new Error("VIDEO_CANCELLED");
+      setFile(downloaded); setVideoUrl(URL.createObjectURL(downloaded)); setFileAcquisition("download_upload"); setFileAudioPresent(true);
+      setMediaStatus("ready"); setMediaNotice("视频已取得，画面和音轨完整。");
+    } catch (caught) {
+      if (mediaTokenRef.current !== token || identityRequest !== linkRequestRef.current) return;
+      setMediaStatus("manual");
+      setMediaNotice(`${caught instanceof Error ? caught.message : "VIDEO_DOWNLOAD_FAILED"}：无法直接取得完整视频。可录制原视频标签页，或上传视频文件；已有评论会保留。`);
+    } finally { await ask("release"); }
+  }, [requestCompanion]);
 
   const runManualLinkAnalysis = () => {
     if (!link.trim() || linkPlatform === "unknown") { setLinkPhase("error"); setLinkError("请先粘贴可识别的抖音、B站或小红书原链接。"); return; }
@@ -498,14 +593,6 @@ export default function ShotprintStudio() {
   const handleConsentChange = (checked: boolean) => {
     setConsent(checked);
     if (checked && autoAnalyzeRef.current && file && videoUrl && phase === "idle") window.setTimeout(() => void runAnalysis(file, videoUrl, fileAcquisition, fileAudioPresent, true), 0);
-  };
-
-  const openGreenVideo = async () => {
-    const helperTab = window.open("https://greenvideo.cc/", "_blank", "noopener,noreferrer");
-    let copied = false;
-    try { await navigator.clipboard.writeText(link.trim()); copied = true; }
-    catch { linkInputRef.current?.focus(); linkInputRef.current?.select(); }
-    setCaptureWarning(copied ? "原链接已复制。下载MP4后回到本页选择文件，评论与研究结果会保留。" : helperTab ? "剪贴板被浏览器拒绝，原链接已选中；请返回本页手动复制后在GreenVideo粘贴。" : "浏览器阻止了新标签页且剪贴板不可用；原链接已选中，请手动复制并打开GreenVideo。" );
   };
 
   const stopTabCapture = () => {
@@ -561,7 +648,7 @@ export default function ShotprintStudio() {
     window.setTimeout(() => document.getElementById("result")?.scrollIntoView({ behavior: "smooth" }), 50);
   };
 
-  async function runAnalysis(targetFile = file, targetVideoUrl = videoUrl, targetAcquisition = fileAcquisition, targetAudioPresent = fileAudioPresent, targetConsent = consent) {
+  const runAnalysis = useCallback(async (targetFile = file, targetVideoUrl = videoUrl, targetAcquisition = fileAcquisition, targetAudioPresent = fileAudioPresent, targetConsent = consent) => {
     if (!targetFile || !targetVideoUrl || !targetConsent || analysisRunRef.current) return;
     const runId = crypto.randomUUID();
     analysisRunRef.current = runId;
@@ -570,6 +657,15 @@ export default function ShotprintStudio() {
     let activeUpload: { objectKey: string; uploadToken: string } | null = null;
     try {
       const metadata = await createVideoMetadata(targetFile);
+      URL.revokeObjectURL(metadata.url);
+      controller.signal.throwIfAborted();
+      if (analysisReceiptRef.current.file !== targetFile) analysisReceiptRef.current = { file: targetFile, taskId: crypto.randomUUID() };
+      const receipt = analysisReceiptRef.current;
+      receipt.taskId ||= crypto.randomUUID();
+      let response: Response;
+      if (receipt.result) response = Response.json({ result: receipt.result });
+      else if (receipt.jobId) response = await fetch(apiUrl(`/api/analyze/jobs/${encodeURIComponent(receipt.jobId)}`), { signal: controller.signal, cache: "no-store" });
+      else {
       setPhase("detecting"); setProgress(8);
       const localCuts = await detectScenes(targetVideoUrl, metadata.durationMs, setProgress, controller.signal);
       setPhase("uploading"); setProgress(43);
@@ -592,13 +688,15 @@ export default function ShotprintStudio() {
       }
       if (!uploadResponse.ok) throw new Error("视频直传 OSS 失败。请检查存储桶 CORS 后重试。");
       setPhase("analyzing"); setProgress(68);
-      let response = await fetch(apiUrl("/api/analyze"), {
-        method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
+      response = await fetch(apiUrl("/api/analyze"), {
+        method: "POST", headers: { "content-type": "application/json", "x-shotprint-task-id": receipt.taskId }, signal: controller.signal,
         body: JSON.stringify({ objectKey: session.objectKey, uploadToken: session.uploadToken, mimeType: targetFile.type, durationMs: metadata.durationMs, localCuts }),
       });
+      }
       if (response.status === 202) {
-        const accepted = await readSafeApiJson<{ analysisJobId?: string; pollAfterMs?: number }>(response, "分析任务没有正常开始");
+        const accepted = receipt.jobId ? { analysisJobId: receipt.jobId, pollAfterMs: 2000 } : await readSafeApiJson<{ analysisJobId?: string; pollAfterMs?: number }>(response, "分析任务没有正常开始");
         if (!accepted.analysisJobId) throw new Error("分析任务没有返回查询凭证，请重新上传。");
+        receipt.jobId = accepted.analysisJobId;
         activeUpload = null;
         const deadline = Date.now() + 15 * 60 * 1000;
         let pollDelay = Math.max(1000, Math.min(5000, Number(accepted.pollAfterMs) || 2000));
@@ -619,6 +717,9 @@ export default function ShotprintStudio() {
         throw new Error(`${payload.error || "模型没有返回可用结果。"}${diagnostic}`);
       }
       const parsed = analysisResultSchema.parse(payload.result);
+      receipt.result = parsed;
+      controller.signal.throwIfAborted();
+      if (analysisRunRef.current !== runId) return;
       setAnalysis(parsed); setPhase("ready"); setProgress(100); setIsDemo(false); setTab("shots");
       if (pendingLinkPayload) {
         setLinkStage(5); setLinkPhase("analyzing");
@@ -650,12 +751,33 @@ export default function ShotprintStudio() {
       window.setTimeout(() => document.getElementById("result")?.scrollIntoView({ behavior: "smooth" }), 50);
     } catch (caught) {
       if (activeUpload) void fetch(apiUrl("/api/upload-session"), { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(activeUpload), keepalive: true });
-      if (caught instanceof DOMException && caught.name === "AbortError") { setPhase("idle"); setProgress(0); return; }
+      if (analysisRunRef.current !== runId) return;
+      if (caught instanceof DOMException && caught.name === "AbortError") { setPhase("idle"); setProgress(0); setMediaStatus("manual"); setMediaNotice("已停止等待分析结果；后台已接收的任务仍负责结算和清理。"); return; }
       setError(caught instanceof Error ? caught.message : "分析意外中断，请重试。"); setPhase("error");
     } finally {
       if (analysisRunRef.current === runId) analysisRunRef.current = null;
     }
-  }
+  }, [file, videoUrl, fileAcquisition, fileAudioPresent, consent, apiUrl, pendingLinkPayload, researchSessionId, videoPageEvidence]);
+
+  useEffect(() => {
+    if (linkPhase !== "comments-ready" || !pendingLinkPayload || !consent) return;
+    const request = linkRequestRef.current || pendingLinkPayload.url;
+    chainRef.current = request;
+    void (async () => {
+      if (pendingLinkPayload.collectionId && mediaChainRef.current !== request) {
+        mediaChainRef.current = request;
+        await acquireLinkVideo(pendingLinkPayload);
+      }
+      if (chainRef.current !== request) return;
+      if (backendStatus === "checking" || backendStatus === "unavailable" || researchChainRef.current === request) return;
+      researchChainRef.current = request;
+      await runDeepResearch();
+    })();
+  }, [linkPhase, pendingLinkPayload, consent, backendStatus, acquireLinkVideo, runDeepResearch]);
+
+  useEffect(() => {
+    if (linkPhase === "awaiting-video" && mediaStatus === "ready" && file && videoUrl && consent && phase === "idle") void runAnalysis();
+  }, [linkPhase, mediaStatus, file, videoUrl, consent, phase, runAnalysis]);
 
   const seek = (index: number) => {
     if (!analysis) return;
@@ -695,51 +817,55 @@ export default function ShotprintStudio() {
 
       <section className="hero" id="top" aria-labelledby="hero-title">
         <div className="hero-copy">
-          <h1 id="hero-title">别让爆款，<br /><span>只躺在收藏夹。</span></h1>
-          <p className="lede">“这条节奏真好”，然后呢？粘贴视频链接，看清观众在意什么、镜头怎样推进，以及哪些做法能用在你的下一条内容里。</p>
-          <div className="evidence-reel" aria-hidden="true">
+          <h1 id="hero-title">别抄爆款。<br /><span>拆懂它。</span></h1>
+          <p className="lede">看看观众为什么愿意看下去，找出真正起作用的镜头和节奏，再把这些方法用进你的下一条视频。</p>
+          <div className="evidence-reel cinematic-reel" aria-hidden="true">
             <i className="reel-playhead" />
             <span><small>00:00</small><b>开头</b></span>
             <span><small>00:03.8</small><b>转场</b></span>
             <span><small>00:11.2</small><b>转折</b></span>
             <span><small>00:20.8</small><b>结尾</b></span>
           </div>
-          <div className="hero-notes"><span>看懂观众反应</span><span>拆开镜头节奏</span><span>带走创作思路</span></div>
+          <div className="hero-notes"><span>观众在意什么</span><span>哪些镜头有效</span><span>换成你的题材怎么拍</span></div>
         </div>
 
         <div className="ingest-card" id="workspace" aria-busy={linkBusy || !["idle", "ready", "error"].includes(phase)}>
-          <div className="card-head"><div><i /><span>拿一条视频试试</span></div></div>
+          <div className="card-head"><div><i /><span>拿一条视频来拆</span></div></div>
           <div className="ingest-mode" role="tablist" aria-label="分析输入方式"><button id="input-link-tab" data-tab="link" type="button" className={inputMode === "link" ? "active" : ""} onClick={() => setInputMode("link")} onKeyDown={(event) => moveTabFocus(event, ["link", "video"] as const, inputMode, setInputMode)} role="tab" aria-selected={inputMode === "link"} aria-controls="link-input-panel" tabIndex={inputMode === "link" ? 0 : -1}>公开视频</button><button id="input-video-tab" data-tab="video" type="button" className={inputMode === "video" ? "active" : ""} onClick={() => setInputMode("video")} onKeyDown={(event) => moveTabFocus(event, ["link", "video"] as const, inputMode, setInputMode)} role="tab" aria-selected={inputMode === "video"} aria-controls="video-input-panel" tabIndex={inputMode === "video" ? 0 : -1}>本地视频</button></div>
-          <div className="sr-only"><input ref={fileInput} type="file" accept="video/mp4,video/quicktime,video/webm" aria-label="选择视频文件" onChange={handleInput} /><input ref={downloadedFileInput} type="file" accept="video/mp4,video/quicktime" aria-label="选择从GreenVideo下载的视频文件" onChange={handleDownloadedInput} /><span>我拥有该素材的分析权利</span><span>开始逐镜拆解（选择文件后自动运行）</span><span>打开 20.8 秒合成样片</span></div>
+          <div className="sr-only"><input ref={fileInput} type="file" accept="video/mp4,video/quicktime,video/webm" aria-label="选择视频文件" onChange={handleInput} /><input ref={downloadedFileInput} type="file" accept="video/mp4,video/quicktime" aria-label="选择下载的视频文件" onChange={handleDownloadedInput} /><span>我拥有该素材的分析权利</span><span>开始逐镜拆解（选择文件后自动运行）</span><span>打开 20.8 秒合成样片</span></div>
           {inputMode === "link" ? <div className="link-ingest" id="link-input-panel" role="tabpanel" aria-labelledby="input-link-tab">
-            <label htmlFor="source-link">把想拆的视频粘在这里</label>
-            <div className={`link-input-shell ${link ? "has-value" : ""}`}><span aria-hidden="true">URL</span><input ref={linkInputRef} id="source-link" name="source-link" type="url" autoComplete="off" spellCheck={false} value={link} onChange={(event) => handleLinkChange(event.target.value)} placeholder="粘贴抖音、B站或小红书原链接…" inputMode="url" />{link && <button type="button" className="input-clear" aria-label="清除原视频链接" onClick={() => { handleLinkChange(""); linkInputRef.current?.focus(); }}>清除</button>}</div>
+            <label htmlFor="source-link">粘贴一条你想研究的视频</label>
+            {shareLinks(link).length > 1 && <div role="group" aria-label="选择视频链接">{shareLinks(link).map((candidate) => <button className="secondary" key={candidate} onClick={() => handleLinkChange(candidate)}>{candidate}</button>)}</div>}
+            {backendStatus === "unavailable" && <div className="link-error" role="alert"><b>分析服务暂时无法连接</b><span>可以先读取评论和视频；恢复连接后会继续分析，已有结果会保留。</span><button onClick={() => { setBackendStatus("checking"); setBackendRetry((value) => value + 1); }}>重试连接</button></div>}
+            <label className="consent"><input type="checkbox" checked={consent} disabled={linkBusy || mediaStatus === "fetching"} onChange={(event) => setConsent(event.target.checked)} /><span>我有权分析此视频，同意临时上传并按实际用量计费。</span></label>
+            {mediaNotice && <div role="status" className="capture-warning">{mediaNotice}</div>}
+            {mediaStatus === "fetching" && <button className="secondary" onClick={() => { mediaTokenRef.current = ""; chainRef.current = ""; setMediaStatus("manual"); setMediaNotice("已取消视频读取，评论已保留。"); }}>取消视频读取</button>}
+            <div className={`link-input-shell ${link ? "has-value" : ""}`}><span aria-hidden="true">URL</span><input ref={linkInputRef} id="source-link" name="source-link" type="text" readOnly={linkBusy || mediaStatus === "fetching" || phase !== "idle"} autoComplete="off" spellCheck={false} value={link} onChange={(event) => handleLinkChange(event.target.value)} placeholder="粘贴抖音、B站或小红书原链接…" inputMode="url" />{link && <button type="button" className="input-clear" aria-label="清除原视频链接" onClick={() => { handleLinkChange(""); linkInputRef.current?.focus(); }}>清除</button>}</div>
             <div className="link-detect" role="status" aria-live="polite"><span className={`platform-mini ${linkPlatform}`}>{linkPlatform === "douyin" ? "抖音" : linkPlatform === "bilibili" ? "B站" : linkPlatform === "xiaohongshu" ? "小红书" : "未粘贴"}</span><span>{linkPhase === "collecting" ? "正在打开视频页面并读取评论…" : linkPhase === "analyzing" ? "评论已读完，正在生成结果…" : bridgeStatus === "ready" ? (linkPlatform === "unknown" ? "浏览器扩展已连接" : "链接已识别，可以开始") : bridgeStatus === "old" ? `浏览器扩展需要更新到 ${EXTENSION_VERSION}` : bridgeStatus === "checking" ? "正在检查浏览器扩展…" : "需要先安装浏览器扩展"}</span></div>
             <details className="system-check">
               <summary><span>连接状态</span><b className={bridgeStatus === "ready" && backendStatus !== "checking" ? "ready" : "waiting"}>{bridgeStatus === "ready" ? "扩展已连接" : "查看详情"}</b></summary>
-              <div className="link-self-check" role="status"><span>浏览器扩展：{bridgeDiagnostics?.version || (bridgeStatus === "old" ? "需要更新" : "检查中")}</span><span>{bridgeStatus === "ready" ? "可以读取评论" : bridgeStatus === "old" ? "版本过旧" : bridgeStatus === "missing" ? "尚未连接" : "正在检查"}</span><span>{bridgeDiagnostics?.companion?.ok ? `本地辅助工具：${bridgeDiagnostics.companion.version || "已运行"}` : "本地辅助工具：未启动，不影响基本功能"}</span>{bridgeDiagnostics?.companion?.ok && <><span>{bridgeDiagnostics.companion.browserAct === "installed" ? "BrowserAct：已安装" : "BrowserAct：未安装"}</span><span>{bridgeDiagnostics.companion.chromeDirect ? "Chrome：可以直连" : "Chrome：未设置直连"}</span><span>{linkPlatform === "unknown" ? "平台登录：粘贴链接后检查" : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "ready" ? `${linkPlatform}：页面可读` : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "login_required" ? `${linkPlatform}：请先登录` : `${linkPlatform}：登录状态未知`}</span><span>{pairingStatus === "paired" || bridgeDiagnostics.companion.paired ? "本地辅助工具：已配对" : "本地辅助工具：未配对"}</span></>}<span>{backendStatus === "aliyun" ? "视频分析：可用" : backendStatus === "fallback" ? "视频分析：正在使用备用服务" : "视频分析：检查中"}</span><span>{searchStatus === "configured" ? "公开资料搜索：可用" : searchStatus === "disabled" ? "公开资料搜索：不可用" : "公开资料搜索：检查中"}</span><button className="diagnostic-copy" type="button" onClick={() => void downloadExtensionPackage()}>下载扩展 {EXTENSION_VERSION}</button><button className="diagnostic-copy" type="button" onClick={() => void copyDiagnostics()}>{diagnosticCopied ? "诊断信息已复制" : "复制诊断信息"}</button></div>
+              <div className="link-self-check" role="status"><span>浏览器扩展：{bridgeDiagnostics?.version || (bridgeStatus === "old" ? "需要更新" : "检查中")}</span><span>{bridgeStatus === "ready" ? "可以读取评论" : bridgeStatus === "old" ? "版本过旧" : bridgeStatus === "missing" ? "尚未连接" : "正在检查"}</span><span>{bridgeDiagnostics?.companion?.ok ? `本地辅助工具：${bridgeDiagnostics.companion.version || "已运行"}` : "本地辅助工具：未启动，不影响基本功能"}</span>{bridgeDiagnostics?.companion?.ok && <><span>{bridgeDiagnostics.companion.browserAct === "installed" ? "BrowserAct：已安装" : "BrowserAct：未安装"}</span><span>{bridgeDiagnostics.companion.chromeDirect ? "Chrome：可以直连" : "Chrome：未设置直连"}</span><span>{linkPlatform === "unknown" ? "平台登录：粘贴链接后检查" : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "ready" ? `${linkPlatform}：页面可读` : bridgeDiagnostics.companion.platformStatus?.[linkPlatform] === "login_required" ? `${linkPlatform}：请先登录` : `${linkPlatform}：登录状态未知`}</span><span>{pairingStatus === "paired" || bridgeDiagnostics.companion.paired ? "本地辅助工具：已配对" : "本地辅助工具：未配对"}</span></>}<span>{backendStatus === "aliyun" ? "视频分析：可用" : backendStatus === "fallback" ? "视频分析：站内服务" : backendStatus === "unavailable" ? "视频分析：无法连接" : "视频分析：检查中"}</span><span>{searchStatus === "configured" ? "公开资料搜索：可用" : searchStatus === "disabled" ? "公开资料搜索：不可用" : "公开资料搜索：检查中"}</span><button className="diagnostic-copy" type="button" onClick={() => void downloadExtensionPackage()}>下载扩展 {EXTENSION_VERSION}</button><button className="diagnostic-copy" type="button" onClick={() => void copyDiagnostics()}>{diagnosticCopied ? "诊断信息已复制" : "复制诊断信息"}</button></div>
             </details>
             {bridgeDiagnostics?.companion?.ok && !(pairingStatus === "paired" || bridgeDiagnostics.companion.paired) && <div className="companion-pair"><label htmlFor="companion-code">本地伴侣配对码</label><input id="companion-code" inputMode="numeric" maxLength={6} value={pairingCode} onChange={(event) => setPairingCode(event.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="6位配对码" /><button className="secondary" disabled={pairingStatus === "pairing"} onClick={() => void pairCompanion()}>{pairingStatus === "pairing" ? "配对中…" : "配对本地伴侣"}</button></div>}
             <div className="link-stages" aria-label="链接分析六阶段">{LINK_STAGES.map((stage, index) => { const status = linkStageStatus(index, linkPhase, linkStage, linkPlatform !== "unknown"); return <div className={status} key={stage}><span>0{index + 1}</span><b>{stage}</b><small>{status === "done" ? "已完成" : status === "active" ? "进行中" : "等待"}</small></div>; })}</div>
-            <button className={`primary link-primary ${extensionActionNeeded ? "setup-action" : ""}`} type="button" disabled={bridgeStatus === "checking" || linkBusy || (!extensionActionNeeded && !link)} onClick={extensionActionNeeded ? () => void downloadExtensionPackage() : runLinkCollection}>{linkPhase === "collecting" ? "正在看观众怎么说…" : bridgeStatus === "checking" ? "正在检查浏览器扩展…" : bridgeStatus === "old" ? `更新浏览器扩展 →` : bridgeStatus === "missing" ? `安装浏览器扩展 →` : !link ? "先粘贴一条视频链接" : "先看观众怎么说 →"}</button>
+            <button className={`primary link-primary ${extensionActionNeeded ? "setup-action" : ""}`} type="button" disabled={bridgeStatus === "checking" || linkBusy || mediaStatus === "fetching" || (!extensionActionNeeded && (!link || !consent))} onClick={extensionActionNeeded ? () => void downloadExtensionPackage() : runLinkCollection}>{linkPhase === "collecting" ? "正在拆解这条视频…" : bridgeStatus === "checking" ? "正在检查浏览器扩展…" : bridgeStatus === "old" ? `更新浏览器扩展 →` : bridgeStatus === "missing" ? `安装浏览器扩展 →` : !link ? "先粘贴一条视频链接" : "拆解这条视频 →"}</button>
             {extensionActionNeeded && <div className="setup-route" role="note"><b>{bridgeStatus === "old" ? "更新后刷新本页" : "首次使用需要安装"}</b><ol><li>下载并解压</li><li>在扩展管理页加载文件夹</li><li>刷新本页</li></ol></div>}
             {pendingLinkPayload && ["comments-ready", "error"].includes(linkPhase) && <div className="collection-checkpoint" role="status">
               <b>已取得 {pendingLinkPayload.comments.length} / {pendingLinkPayload.targetCount || (pendingLinkPayload.collectionId ? 100 : pendingLinkPayload.comments.length)} 条匿名评论</b>
               <span>{pendingLinkPayload.engine === "browser-act-network" ? "BrowserAct网络响应" : pendingLinkPayload.engine === "browser-act-dom" ? "BrowserAct DOM兜底" : pendingLinkPayload.engine === "extension-api" ? "页面接口" : "扩展DOM"} · {pendingLinkPayload.pageCount || pendingLinkPayload.cursorCount || 0} 页/游标 · 滚动 {pendingLinkPayload.scrollActions || 0} 次 · {Math.round((pendingLinkPayload.durationMs || 0) / 1000)} 秒 · {pendingLinkPayload.stopReason || "手动导入"} · 当前排序 {pendingLinkPayload.sortMode || "unknown"}</span>
               {pendingLinkPayload.comments.length < 100 && <small>评论较少，结果可能受页面排序影响。</small>}
-              <div><button className="secondary" disabled={!pendingLinkPayload.continuationAvailable || linkPhase === "continuing"} onClick={continueLinkCollection}>{linkPhase === "continuing" ? "继续读取中…" : "再读取一些评论"}</button><button className="primary" onClick={() => void runDeepResearch()}>继续查找公开资料</button></div>
+              <div><button className="secondary" disabled={!pendingLinkPayload.continuationAvailable || linkPhase === "continuing"} onClick={continueLinkCollection}>{linkPhase === "continuing" ? "继续读取中…" : "再读取一些评论"}</button><button className="primary" disabled={mediaStatus === "fetching" || !consent || backendStatus === "unavailable"} onClick={() => void runDeepResearch()}>继续查找公开资料</button></div>
             </div>}
             {["researching", "cross-checking"].includes(linkPhase) && <div className="research-live" role="status"><b>{linkPhase === "cross-checking" ? "正在核对信息" : "正在查找公开资料"}</b><span>已完成 {researchProgress.completedQueries} / {researchProgress.totalQueries} 项 · 找到 {researchProgress.sourceCount} 个来源</span><i><em style={{ width: `${Math.min(100, (researchProgress.completedQueries / Math.max(1, researchProgress.totalQueries)) * 100)}%` }} /></i></div>}
             {linkAnalysis && linkPhase === "awaiting-video" && <div className="video-evidence-gate" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const selected = event.dataTransfer.files?.[0]; if (selected) void chooseFile(selected, "download_upload"); }}>
-              <b>评论和公开资料已经整理好，还需要视频文件</b>
-              <span>上传原片后，才能标出具体镜头和时间点。</span>
+              <b>评论和公开资料已保留，请补充完整视频</b>
+              <span>选择原视频标签页并共享音频，或上传你已有的视频文件。</span>
               <label className="consent"><input type="checkbox" checked={consent} onChange={(event) => handleConsentChange(event.target.checked)} /><span>我有权使用这段视频，并同意为完成分析临时上传。视频不会长期保存。</span></label>
               <div className="video-evidence-options">
-                <div className="recommended"><small>推荐</small><b>下载原片</b><span>打开 GreenVideo 下载 MP4，然后回到这里选择文件。</span><button className="primary" type="button" onClick={() => void openGreenVideo()}>打开 GreenVideo ↗</button><button className="secondary" type="button" onClick={() => downloadedFileInput.current?.click()}>选择下载好的视频</button></div>
                 <div><small>电脑里已有视频</small><b>直接上传</b><span>选择 MP4 或 MOV，之后会自动开始分析。</span><button className="secondary" type="button" onClick={() => fileInput.current?.click()}>选择视频</button></div>
                 <div><small>无法下载</small><b>录制当前标签页</b><span>录制时请选择原视频标签页并共享音频，最长 300 秒。</span><button className="secondary" type="button" onClick={() => void startTabCapture()}>开始录制</button></div>
               </div>
-              <div className="download-drop">把GreenVideo下载的 MP4 / MOV 拖到这里</div>
+              <div className="download-drop">把视频文件拖到这里</div>
               {file && <small>{file.name} · {(file.size / 1024 / 1024).toFixed(1)}MB · {phase === "idle" ? consent ? "即将自动分析" : "等待勾选授权" : PHASE_COPY[phase]}</small>}
               {captureWarning && <small>{captureWarning}</small>}
             </div>}
@@ -797,9 +923,9 @@ export default function ShotprintStudio() {
         </div>
 
         <div className="warning-band"><span>需要留意</span><p>{analysis.warnings.join(" · ")}</p><b>{analysis.provenance.model}</b></div>
-      </section> : !linkAnalysis && <section className="empty-blueprint"><div><h2>你收藏的是视频，镜谱拆出来的是方法。</h2><p>一条视频拆完，不只知道它哪里好看，还知道观众在意什么、开头怎样抓人、节奏如何推进，以及换成你的题材可以怎么拍。</p></div><ol><li>大家为什么愿意看下去</li><li>哪些镜头真正起作用</li><li>拍摄和剪辑怎么落地</li><li>怎样借方法而不照搬</li></ol></section>}
+      </section> : !linkAnalysis && <section className="empty-blueprint"><div><h2>这条视频，到底好在哪？</h2><p>哪里抓人，哪里拖沓，换成你的题材怎么拍。</p></div><ol><li>大家为什么愿意看下去</li><li>哪些镜头真正起作用</li><li>拍摄和剪辑怎么落地</li><li>怎样借方法而不照搬</li></ol></section>}
 
-      <footer><div className="wordmark"><span className="mark">镜</span><span>镜谱 <i>SHOTPRINT</i></span></div><p>好内容可以学，人物、台词和画面不必复制。镜谱只帮你带走真正有用的方法。</p><button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>拆一条视频 ↑</button></footer>
+      <footer><div className="wordmark"><span className="mark">镜</span><span>镜谱 <i>SHOTPRINT</i></span></div><p>学它的方法，拍你的内容。</p><button onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}>拆解一条视频 ↑</button></footer>
     </main>
   );
 }

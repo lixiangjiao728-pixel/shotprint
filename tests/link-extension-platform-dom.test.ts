@@ -60,7 +60,7 @@ async function runCollector(platform: "douyin" | "xiaohongshu", douyinVariant: "
     chrome: { runtime: { getManifest: () => ({ version: "0.6.0" }), onMessage: { addListener: (fn: typeof listener) => { listener = fn; } }, sendMessage: (message: Message) => outbound.push(message) } },
     setTimeout: (callback: () => void) => { callback(); return 1; },
     clearTimeout: () => undefined,
-    Date, Promise, Map, Set,
+    Date, Promise, Map, Set, URL, URLSearchParams,
   };
   vm.runInNewContext(source, context);
   listener?.({ type: "shotprint:collect-page", requestId: `fixture-${platform}` }, {}, () => undefined);

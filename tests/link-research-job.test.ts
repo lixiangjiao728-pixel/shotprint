@@ -8,6 +8,8 @@ test("Aliyun research returns a pollable job instead of holding the API Gateway 
   assert.match(server, /status:\s*202/);
   assert.match(server, /\/api\\\/link-research\\\/jobs/);
   assert.match(server, /runtime\.STATE_STORE\.putJson\(researchJobKey\(id\), base\)/);
+  assert.match(server, /requestedTaskId\(request\)/);
+  assert.match(server, /getJson<ResearchJob>\(researchJobKey\(id\)\)/);
   assert.doesNotMatch(server, /path === "\/api\/link-research"[^\n]+bufferResearchResponse/);
 });
 
@@ -16,6 +18,7 @@ test("frontend polls an accepted research job without resubmitting the paid POST
   assert.match(studio, /response\.status === 202/);
   assert.match(studio, /\/api\/link-research\/jobs\/\$\{encodeURIComponent\(accepted\.researchJobId\)\}/);
   assert.match(studio, /Date\.now\(\) \+ 8 \* 60 \* 1000/);
+  assert.match(studio, /"x-shotprint-task-id": receiptCache\.taskId/);
 });
 
 test("failed research jobs preserve the safe backend message", async () => {

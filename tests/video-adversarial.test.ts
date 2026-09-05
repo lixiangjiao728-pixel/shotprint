@@ -148,10 +148,12 @@ test("five-minute production transport is asynchronous and accepts a 300MB uploa
     readFile(new URL("../app/api/analyze/route.ts", import.meta.url), "utf8"),
   ]);
   assert.match(server, /analysisJobId/);
+  assert.match(server, /getJson<AnalysisJob>\(analysisJobKey\(id\)\)/);
   assert.match(server, /analysisJobMatch = path\.match/);
   assert.match(studio, /\/api\/analyze\/jobs\/\$\{encodeURIComponent\(accepted\.analysisJobId\)\}/);
   assert.match(studio, /Date\.now\(\) \+ 15 \* 60 \* 1000/);
   assert.match(studio, /analysisRunRef\.current/);
+  assert.match(studio, /"x-shotprint-task-id": receipt\.taskId/);
   assert.match(studio, /finally \{\s*if \(analysisRunRef\.current === runId\) analysisRunRef\.current = null/);
   assert.match(uploadRoute, /314572800/);
   assert.match(analyzeRoute, /证据记录最多 48 个连续时间段/);

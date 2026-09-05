@@ -57,7 +57,7 @@ export async function POST(request: Request) {
   const audienceDigest = normalizeAudienceDigest(body.audienceDigest);
   if (!audienceDigest) return jsonError("还没有可用的评论摘要，请先读取评论。", 422);
   const commentEvidence = buildCommentEvidence(Array.isArray(body.commentEvidence) ? body.commentEvidence : []).comments;
-  if (!commentEvidence.length || commentEvidence.some((comment) => !audienceDigest.evidenceIds.includes(comment.id))) return jsonError("匿名评论证据与观众摘要不一致，请重新采集。", 422);
+  if (commentEvidence.some((comment) => !audienceDigest.evidenceIds.includes(comment.id)) || commentEvidence.length !== audienceDigest.evidenceIds.length) return jsonError("匿名评论证据与观众摘要不一致，请重新采集。", 422);
   const originalCommentCount = audienceDigest.originalSampleCount;
   if (!runtime.DASHSCOPE_API_KEY || (!runtime.DB && !runtime.STATE_STORE)) return jsonError("公开资料查询暂不可用，请稍后重试。", 503);
   const researchRuntime = { ...runtime, DAILY_IP_LIMIT: runtime.RESEARCH_DAILY_IP_LIMIT || "10" };

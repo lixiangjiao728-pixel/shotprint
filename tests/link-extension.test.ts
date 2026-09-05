@@ -11,7 +11,7 @@ test("link bridge reports readiness, correlates requests, and fails closed", asy
     readFile(new URL("extension/background.js", root), "utf8"),
     readFile(new URL("extension/manifest.json", root), "utf8").then(JSON.parse),
   ]);
-  assert.equal(manifest.version, "0.6.9");
+  assert.equal(manifest.version, "0.7.1");
   assert.equal(manifest.host_permissions.includes("https://shotprint.xyz/*"), true);
   assert.equal(manifest.content_scripts[0].matches.includes("https://shotprint.xyz/*"), true);
   assert.match(studio, /phase === "idle"\) return recognized/);

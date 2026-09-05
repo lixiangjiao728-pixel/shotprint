@@ -110,7 +110,6 @@ export function normalizeAudienceDigest(value: unknown): AudienceDigest | null {
   const raw = value as Record<string, unknown>;
   if (raw.contract !== "audience-digest.1") return null;
   const evidenceIds = Array.isArray(raw.evidenceIds) ? raw.evidenceIds.filter((id): id is string => typeof id === "string" && /^E\d{3}$/.test(id)).slice(0, 100) : [];
-  if (!evidenceIds.length) return null;
   const allowedIds = new Set(evidenceIds);
   const reactions = Array.isArray(raw.reactions) ? raw.reactions.flatMap((item) => {
     if (!item || typeof item !== "object") return [];

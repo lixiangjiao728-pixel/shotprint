@@ -1,6 +1,6 @@
 (() => {
-  if (globalThis.__SHOTPRINT_SITE_BRIDGE_V069__) return;
-  globalThis.__SHOTPRINT_SITE_BRIDGE_V069__ = true;
+  if (globalThis.__SHOTPRINT_SITE_BRIDGE_V071__) return;
+  globalThis.__SHOTPRINT_SITE_BRIDGE_V071__ = true;
   const initialRuntime = globalThis.chrome?.runtime;
   if (!initialRuntime) return;
   const manifest = initialRuntime.getManifest();
@@ -82,7 +82,7 @@
       });
       return;
     }
-    if (["shotprint:companion-health", "shotprint:pair", "shotprint:playback-prepare", "shotprint:cancel", "shotprint:cancel-collection"].includes(event.data.type)) {
+    if (["shotprint:media-read", "shotprint:companion-health", "shotprint:pair", "shotprint:playback-prepare", "shotprint:cancel", "shotprint:cancel-collection"].includes(event.data.type)) {
       sendRuntime({ ...event.data }, (response) => forward({ type: "shotprint:companion-response", requestId: event.data.requestId, action: event.data.type, response }));
       return;
     }

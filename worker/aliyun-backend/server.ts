@@ -36,10 +36,18 @@ type AnalysisJob = {
 
 function researchJobKey(id: string) { return `research-jobs/${id}.json`; }
 function analysisJobKey(id: string) { return `analysis-jobs/${id}.json`; }
+function requestedTaskId(request: Request) {
+  const value = request.headers.get("x-shotprint-task-id") || "";
+  return /^[0-9a-f-]{36}$/i.test(value) ? value.toLowerCase() : "";
+}
 
 async function startAnalysisJob(request: Request) {
   if (!runtime.STATE_STORE) return Response.json({ error: "ANALYSIS_JOB_STORE_UNAVAILABLE" }, { status: 503 });
-  const id = crypto.randomUUID();
+  const id = requestedTaskId(request) || crypto.randomUUID();
+  const existing = await runtime.STATE_STORE.getJson<AnalysisJob>(analysisJobKey(id));
+  if (existing && Date.parse(existing.expiresAt) > Date.now()) {
+    return Response.json({ status: "accepted", analysisJobId: id, pollAfterMs: 1000 }, { status: 202, headers: { "cache-control": "no-store" } });
+  }
   const now = Date.now();
   const base: AnalysisJob = { status: "pending", createdAt: new Date(now).toISOString(), expiresAt: new Date(now + analysisJobTtlMs).toISOString() };
   await runtime.STATE_STORE.putJson(analysisJobKey(id), base);
@@ -74,7 +82,11 @@ async function readAnalysisJob(id: string) {
 
 async function startResearchJob(request: Request) {
   if (!runtime.STATE_STORE) return Response.json({ error: "RESEARCH_JOB_STORE_UNAVAILABLE" }, { status: 503 });
-  const id = crypto.randomUUID();
+  const id = requestedTaskId(request) || crypto.randomUUID();
+  const existing = await runtime.STATE_STORE.getJson<ResearchJob>(researchJobKey(id));
+  if (existing && Date.parse(existing.expiresAt) > Date.now()) {
+    return Response.json({ status: "accepted", researchJobId: id, pollAfterMs: 1000 }, { status: 202, headers: { "cache-control": "no-store" } });
+  }
   const now = Date.now();
   const base: ResearchJob = { status: "pending", createdAt: new Date(now).toISOString(), expiresAt: new Date(now + researchJobTtlMs).toISOString() };
   await runtime.STATE_STORE.putJson(researchJobKey(id), base);
@@ -110,7 +122,7 @@ function cors(origin: string | undefined) {
   return origin && allowedOrigins.has(origin) ? {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,x-shotprint-contract",
+    "access-control-allow-headers": "content-type,x-shotprint-contract,x-shotprint-task-id",
     "access-control-max-age": "600",
     vary: "Origin",
   } : {};

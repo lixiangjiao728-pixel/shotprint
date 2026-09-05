@@ -1,17 +1,20 @@
 {
   "manifest_version": 3,
   "name": "镜谱 Shotprint 取证桥",
-  "version": "0.6.9",
-  "version_name": "0.6.9",
-  "description": "用户主动点击后采集三平台匿名评论；页面适配器失败时可配对本机BrowserAct伴侣安全降级。",
+  "version": "0.7.1",
+  "version_name": "0.7.1",
+  "description": "用户主动点击后识别三平台作品、采集匿名评论并读取可访问视频；受限时保留结果并提供录制或上传入口。",
   "permissions": ["tabs", "scripting"],
   "host_permissions": [
     "https://www.douyin.com/*",
     "https://*.douyin.com/*",
+    "https://*.iesdouyin.com/*",
     "https://*.bilibili.com/*",
     "https://b23.tv/*",
     "https://www.xiaohongshu.com/*",
+    "https://*.xiaohongshu.com/*",
     "https://xhslink.com/*",
+    "https://www.xhslink.com/*",
     "https://shotprint.xyz/*",
     "https://shotprint-ai-film.lixiangjia27.chatgpt.site/*",
     "http://localhost/*",
@@ -19,7 +22,7 @@
   ],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [{
-    "matches": ["https://shotprint.xyz/*", "https://shotprint-ai-film.lixiangjia27.chatgpt.site/*", "http://localhost/*"],
+    "matches": ["https://shotprint.xyz/*", "https://shotprint-ai-film.lixiangjia27.chatgpt.site/*", "http://localhost/*", "http://127.0.0.1/*"],
     "js": ["site-bridge.js"],
     "run_at": "document_idle"
   }]

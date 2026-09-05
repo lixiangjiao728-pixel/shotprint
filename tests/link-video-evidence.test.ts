@@ -55,9 +55,11 @@ test("temporary research payload stores only source metadata, derived conclusion
   assert.equal(payload.sources[0].url, "https://example.com/a");
 });
 
-test("GreenVideo flow opens a new tab, preserves link mode and auto-starts after file validation", async () => {
+test("video acquisition keeps the report and uses in-page recording without a download website", async () => {
   const source = await readFile(new URL("../app/ShotprintStudio.tsx", import.meta.url), "utf8");
-  assert.match(source, /window\.open\("https:\/\/greenvideo\.cc\/", "_blank"/);
+  assert.doesNotMatch(source, /greenvideo\.cc/);
+  assert.match(source, /shotprint:media-read/);
+  assert.match(source, /mp4Tracks/);
   assert.match(source, /chooseFile\(selected, "download_upload"\)/);
   assert.match(source, /autoAnalyzeRef\.current/);
   assert.match(source, /runAnalysis\(file, videoUrl, fileAcquisition, fileAudioPresent, true\)/);

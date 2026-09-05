@@ -56,6 +56,7 @@ test("collector handshake is idempotent and merges comments across bounded scrol
     Map,
     Set,
     URL,
+    URLSearchParams,
   };
   vm.runInNewContext(source, context);
   assert.ok(listener);
@@ -110,9 +111,9 @@ test("collector reports HTTP_403 only for an actual access-denied page", async (
   assert.equal(error?.code, "HTTP_403");
 });
 
-test("manifest keeps only required permissions and exposes user-facing v0.6.9", async () => {
+test("manifest keeps only required permissions and exposes user-facing v0.7.1", async () => {
   const manifest = JSON.parse(await readFile(new URL("../extension/manifest.json", import.meta.url), "utf8"));
-  assert.equal(manifest.version_name, "0.6.9");
+  assert.equal(manifest.version_name, "0.7.1");
   assert.deepEqual(manifest.permissions.sort(), ["scripting", "tabs"]);
   assert.equal("cookies" in manifest.permissions, false);
   assert.equal("webRequest" in manifest.permissions, false);
@@ -125,16 +126,16 @@ test("legacy offline extension checksum remains internally consistent", async ()
   assert.equal(createHash("sha256").update(zip).digest("hex"), expected);
 });
 
-test("homepage download payload is a valid v0.6.9 ZIP with a matching checksum", async () => {
+test("homepage download payload is a valid v0.7.1 ZIP with a matching checksum", async () => {
   const [encoded, expected, studio] = await Promise.all([
-    readFile(new URL("../public/shotprint-extension-0.6.9.zip.b64", import.meta.url), "utf8"),
-    readFile(new URL("../public/shotprint-extension-0.6.9.zip.sha256", import.meta.url), "utf8"),
+    readFile(new URL("../public/shotprint-extension-0.7.1.zip.b64", import.meta.url), "utf8"),
+    readFile(new URL("../public/shotprint-extension-0.7.1.zip.sha256", import.meta.url), "utf8"),
     readFile(new URL("../app/ShotprintStudio.tsx", import.meta.url), "utf8"),
   ]);
   const zip = Buffer.from(encoded.trim(), "base64");
   assert.equal(zip.subarray(0, 2).toString("ascii"), "PK");
   assert.equal(zip.length > 10000, true);
   assert.equal(createHash("sha256").update(zip).digest("hex"), expected.trim());
-  assert.match(studio, /shotprint-extension-0\.6\.9\.zip\.b64/);
+  assert.match(studio, /shotprint-extension-0\.7\.1\.zip\.b64/);
   assert.match(studio, /下载扩展 \{EXTENSION_VERSION\}/);
 });

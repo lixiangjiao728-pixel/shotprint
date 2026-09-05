@@ -14,16 +14,19 @@ const SITE_ORIGINS = [
   "https://shotprint.xyz/*",
   "https://shotprint-ai-film.lixiangjia27.chatgpt.site/*",
   "http://localhost/*",
+  "http://127.0.0.1/*",
 ];
 const PLATFORM_ORIGINS = [
   "https://www.douyin.com/*", "https://*.douyin.com/*", "https://*.bilibili.com/*", "https://b23.tv/*",
-  "https://www.xiaohongshu.com/*", "https://xhslink.com/*",
+  "https://*.iesdouyin.com/*", "https://www.xiaohongshu.com/*", "https://*.xiaohongshu.com/*", "https://xhslink.com/*", "https://www.xhslink.com/*",
 ];
 
 function platformHost(url) {
   try {
-    const host = new URL(url).hostname.toLowerCase();
-    return host === "b23.tv" || host === "xhslink.com" || host === "douyin.com" || host.endsWith(".douyin.com") || host === "iesdouyin.com" || host.endsWith(".iesdouyin.com") || host === "bilibili.com" || host.endsWith(".bilibili.com") || host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com");
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password) return false;
+    const host = parsed.hostname.toLowerCase();
+    return host === "b23.tv" || (host === "xhslink.com" || host === "www.xhslink.com") || host === "douyin.com" || host.endsWith(".douyin.com") || host === "iesdouyin.com" || host.endsWith(".iesdouyin.com") || host === "bilibili.com" || host.endsWith(".bilibili.com") || host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com");
   } catch { return false; }
 }
 
@@ -32,13 +35,13 @@ function platformName(url) {
     const host = new URL(url).hostname;
     if (host === "douyin.com" || host.endsWith(".douyin.com") || host === "iesdouyin.com" || host.endsWith(".iesdouyin.com")) return "douyin";
     if (host === "b23.tv" || host === "bilibili.com" || host.endsWith(".bilibili.com")) return "bilibili";
-    if (host === "xhslink.com" || host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com")) return "xiaohongshu";
+    if ((host === "xhslink.com" || host === "www.xhslink.com") || host === "xiaohongshu.com" || host.endsWith(".xiaohongshu.com")) return "xiaohongshu";
   } catch { /* invalid URLs are rejected by the caller */ }
   return "unknown";
 }
 
 function shortHost(url) {
-  try { const host = new URL(url).hostname.toLowerCase(); return host === "v.douyin.com" || host === "b23.tv" || host === "xhslink.com"; } catch { return false; }
+  try { const host = new URL(url).hostname.toLowerCase(); return host === "v.douyin.com" || host === "b23.tv" || (host === "xhslink.com" || host === "www.xhslink.com"); } catch { return false; }
 }
 
 function supportedVideoPage(url) {
@@ -57,6 +60,17 @@ function supportedVideoPage(url) {
     if (platform === "xiaohongshu") return /^\/(?:discovery\/item|explore|search_result)\/[a-zA-Z0-9]+/.test(parsed.pathname);
   } catch { /* invalid */ }
   return false;
+}
+
+function workIdentity(url) {
+  try {
+    const parsed = new URL(url);
+    const platform = platformName(url);
+    const id = platform === "douyin"
+      ? parsed.searchParams.get("modal_id") || parsed.searchParams.get("aweme_id") || parsed.searchParams.get("item_id") || new URLSearchParams(parsed.hash.includes("?") ? parsed.hash.slice(parsed.hash.indexOf("?") + 1) : parsed.hash.replace(/^#/, "")).get("modal_id") || parsed.pathname.match(/\/(?:share\/)?video\/([\w-]+)/)?.[1]
+      : parsed.pathname.match(/\/(?:video|explore|discovery\/item|search_result)\/([\w-]+)/)?.[1];
+    return id ? `${platform}:${id}${platform === "bilibili" ? `:p${parsed.searchParams.get("p") || "1"}` : ""}` : "";
+  } catch { return ""; }
 }
 
 function sendToSite(job, message) {
@@ -200,7 +214,7 @@ async function waitForLoadedSource(tabId, requestedUrl, timeoutMs = SOURCE_LOAD_
           if (chrome.runtime.lastError) return rejectOnce(new Error("SOURCE_TAB_CLOSED"));
           const currentUrl = currentTab?.pendingUrl || currentTab?.url || "";
           if (!platformHost(currentUrl) || platformName(currentUrl) !== requestedPlatform || shortHost(currentUrl)) return;
-          if (currentUrl === lastCandidateUrl || supportedVideoPage(currentUrl)) resolveOnce({ ...currentTab, url: currentUrl });
+          if (supportedVideoPage(currentUrl)) resolveOnce({ ...currentTab, url: currentUrl });
         });
       }, strongRoute ? 800 : SOURCE_ROUTE_STABLE_MS);
     };
@@ -218,6 +232,8 @@ async function waitForLoadedSource(tabId, requestedUrl, timeoutMs = SOURCE_LOAD_
 }
 
 async function injectAndHandshake(job) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+  if (jobs.get(job.sourceTabId) !== job || job.terminalMessage) throw Object.assign(new Error("collection-cancelled"), { code: "COLLECTION_CANCELLED" });
   try {
     await chrome.scripting.executeScript({ target: { tabId: job.sourceTabId }, files: ["collector.js"] });
   } catch (error) {
@@ -226,7 +242,6 @@ async function injectAndHandshake(job) {
     if (/No tab|closed|invalid tab/i.test(message)) throw Object.assign(new Error(message), { code: "SOURCE_TAB_CLOSED" });
     throw Object.assign(new Error(message), { code: "INJECTION_FAILED" });
   }
-  for (let attempt = 0; attempt < 3; attempt += 1) {
     const response = await sendTabMessage(job.sourceTabId, { type: "shotprint:source-ping", requestId: job.requestId });
     if (response?.ok) {
       const manifest = chrome.runtime.getManifest();
@@ -235,37 +250,81 @@ async function injectAndHandshake(job) {
       sendToSite(job, { type: "shotprint:progress", stage: 2, detail: "source-ready" });
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => setTimeout(resolve, 1500));
   }
   throw Object.assign(new Error("source-handshake-timeout"), { code: "SOURCE_HANDSHAKE_TIMEOUT" });
 }
 
-async function startCollection(job) {
+async function startCollection(job, skipLoad = false) {
   try {
-    if (job.mode !== "continue") {
+    if (job.mode !== "continue" && !skipLoad) {
       const tab = await waitForLoadedSource(job.sourceTabId, job.requestedUrl);
       job.finalUrl = tab.url || job.requestedUrl;
+      job.identityKey = workIdentity(job.finalUrl);
+      if (!job.identityKey) throw Object.assign(new Error("target-video-not-resolved"), { code: "TARGET_VIDEO_NOT_RESOLVED" });
       sendToSite(job, { type: "shotprint:progress", stage: 2, detail: "page-ready" });
     }
     await injectAndHandshake(job);
     sendToSite(job, { type: "shotprint:progress", stage: 3 });
-    armJobTimeout(job, COLLECTION_HARD_TIMEOUT_MS, "COLLECTION_TIMEOUT", "collect", "评论采集达到100秒硬上限，已停止并保留手动导入入口。");
-    const response = await sendTabMessage(job.sourceTabId, { type: "shotprint:collect-page", requestId: job.requestId, targetCount: job.targetCount }, 2500);
+    job.collectionDeadline ||= Date.now() + COLLECTION_HARD_TIMEOUT_MS;
+    const remaining = job.collectionDeadline - Date.now();
+    if (remaining <= 0) throw Object.assign(new Error("collection-timeout"), { code: "COLLECTION_TIMEOUT" });
+    armJobTimeout(job, remaining, "COLLECTION_TIMEOUT", "collect", "评论采集达到100秒硬上限，已停止并保留手动导入入口。");
+    const response = await sendTabMessage(job.sourceTabId, { type: "shotprint:collect-page", requestId: job.requestId, requestedUrl: job.requestedUrl, targetCount: job.targetCount }, 2500);
     if (!response?.accepted) throw Object.assign(new Error(response?.reason || "collector-not-ready"), { code: "INJECTION_FAILED" });
+    job.collecting = true;
+    job.recovering = false;
   } catch (error) {
+    if (jobs.get(job.sourceTabId) !== job || job.terminalMessage) return;
     const code = error?.code || (error?.message === "SOURCE_LOAD_TIMEOUT" ? "SOURCE_LOAD_TIMEOUT" : "INJECTION_FAILED");
     const messages = {
       SOURCE_LOAD_TIMEOUT: "原视频页90秒内没有加载完成，请检查网络后重试。",
       SOURCE_TAB_CLOSED: "原视频标签页已关闭，采集已停止。",
       SITE_ACCESS_DENIED: "扩展没有获得原视频平台的网站权限；请在扩展详情把网站访问权限设为“在所有请求的网站上”。",
-      EXTENSION_VERSION_MISMATCH: "原视频页使用了旧版取证脚本，请重新加载0.6.9扩展后刷新镜谱网页。",
+      EXTENSION_VERSION_MISMATCH: "原视频页使用了旧版取证脚本，请重新加载0.7.1扩展后刷新镜谱网页。",
       SOURCE_HANDSHAKE_TIMEOUT: "脚本已尝试注入，但原视频页没有返回取证握手；请确认页面不是验证码、403、429或登录墙。",
+      TARGET_VIDEO_NOT_RESOLVED: "平台页面已打开，但还没有确认到目标作品。请使用作品详情页或带访问参数的分享链接。",
+      TARGET_VIDEO_CHANGED: "原视频页已切换到另一个作品，请重新开始分析。",
+      COLLECTION_TIMEOUT: "评论采集达到100秒硬上限，已停止并保留手动导入入口。",
       INJECTION_FAILED: "取证脚本注入失败；请在扩展详情检查错误并重试。",
     };
     if (["INJECTION_FAILED", "SOURCE_HANDSHAKE_TIMEOUT", "SITE_ACCESS_DENIED"].includes(code)) return void collectViaCompanion(job, code);
     fail(job, code, "inject", messages[code] || "原视频页取证失败，请重试。");
   }
 }
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const job = jobs.get(tabId);
+  if (!job || job.terminalMessage) return;
+  if (/安全限制|访问被拒绝|access denied|forbidden/i.test(changeInfo.title || tab?.title || "")) {
+    fail(job, "HTTP_403", "platform", "平台限制了此次访问。请在原视频标签页完成验证或恢复访问后重试。");
+    return;
+  }
+  if (job.collecting && changeInfo.status === "loading") {
+    job.collecting = false;
+    job.recovering = true;
+    job.recoveryCount = (job.recoveryCount || 0) + 1;
+    sendToSite(job, { type: "shotprint:progress", stage: 2, detail: "page-navigated-recovering" });
+    return;
+  }
+  if (!job.recovering || changeInfo.status !== "complete") return;
+  const currentUrl = tab?.url || "";
+  if (!platformHost(currentUrl) || platformName(currentUrl) !== platformName(job.requestedUrl)) {
+    fail(job, "TARGET_VIDEO_CHANGED", "platform", "原视频页离开了目标平台，请重新开始分析。");
+    return;
+  }
+  const currentIdentity = workIdentity(currentUrl);
+  if (!currentIdentity || currentIdentity !== job.identityKey) {
+    fail(job, currentIdentity ? "TARGET_VIDEO_CHANGED" : "TARGET_VIDEO_NOT_RESOLVED", "platform", currentIdentity ? "原视频页已切换到另一个作品，请重新开始分析。" : "跳转后的页面无法确认目标作品，请回到作品详情页后重试。");
+    return;
+  }
+  if (job.recoveryCount > 2) {
+    fail(job, "SOURCE_NAVIGATION_UNSTABLE", "platform", "原视频页反复跳转，读取已停止。请等待页面稳定后重试。");
+    return;
+  }
+  job.finalUrl = currentUrl;
+  void startCollection(job, true);
+});
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "shotprint:site-bridge" || !port.sender?.tab?.id) return;
@@ -286,6 +345,16 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "shotprint:media-read") {
+    const session = collectionSessions.get(message.collectionId);
+    if (!session || session.siteTabId !== sender.tab?.id || session.expiresAt <= Date.now() || !session.identityKey) {
+      sendResponse({ ok: false, code: "VIDEO_SESSION_EXPIRED" }); return;
+    }
+    chrome.scripting.executeScript({ target: { tabId: session.sourceTabId }, files: ["media.js"] })
+      .then(() => sendTabMessage(session.sourceTabId, { type: "shotprint:media-read", identityKey: session.identityKey, token: message.token, action: message.action, offset: message.offset }, 10000))
+      .then(sendResponse).catch(() => sendResponse({ ok: false, code: "VIDEO_SOURCE_UNAVAILABLE" }));
+    return true;
+  }
   if (message?.type === "shotprint:companion-health") {
     companionRequest("/v1/health", null, false, 2500).then((payload) => sendResponse({ ok: true, ...payload })).catch((error) => sendResponse({ ok: false, code: error?.code || "COMPANION_NOT_RUNNING" }));
     return true;
@@ -375,22 +444,20 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (!sender.tab?.id || !["shotprint:comments", "shotprint:progress", "shotprint:error"].includes(message?.type)) return;
   const job = jobs.get(sender.tab.id);
-  if (!job || message.requestId !== job.requestId) return;
+  if (!job || job.terminalMessage || message.requestId !== job.requestId) return;
   if (message.type === "shotprint:error" && !["CAPTCHA_REQUIRED", "HTTP_403", "HTTP_429", "LOGIN_WALL"].includes(message.code) && ["PLATFORM_LAYOUT_CHANGED", "INJECTION_FAILED", "SOURCE_HANDSHAKE_TIMEOUT"].includes(message.code)) {
     void collectViaCompanion(job, message.code);
     return;
   }
   const outgoing = message.type === "shotprint:comments"
-    ? { ...message, payload: { ...message.payload, engine: message.payload?.engine || "extension-dom", strategyVersion: message.payload?.strategyVersion || "extension-dom-v0.6.9", sampleCount: message.payload?.comments?.length || 0, pageCount: message.payload?.pageCount || 0, cursorCount: message.payload?.cursorCount || 0, collectionId: job.collectionId } }
+    ? { ...message, payload: { ...message.payload, engine: message.payload?.engine || "extension-dom", strategyVersion: message.payload?.strategyVersion || "extension-dom-v0.7.1", sampleCount: message.payload?.comments?.length || 0, pageCount: message.payload?.pageCount || 0, cursorCount: message.payload?.cursorCount || 0, collectionId: job.collectionId } }
     : message;
   if (message.type === "shotprint:progress") {
     sendToSite(job, outgoing);
     return;
   }
-  if (message.type === "shotprint:comments" && message.payload?.continuationAvailable) {
-    collectionSessions.set(job.collectionId, { siteTabId: job.siteTabId, sourceTabId: job.sourceTabId, requestedUrl: job.requestedUrl, finalUrl: job.finalUrl, collectionId: job.collectionId, expiresAt: Date.now() + SESSION_TTL_MS });
-  } else if (message.type === "shotprint:comments") {
-    collectionSessions.delete(job.collectionId);
+  if (message.type === "shotprint:comments") {
+    collectionSessions.set(job.collectionId, { siteTabId: job.siteTabId, sourceTabId: job.sourceTabId, requestedUrl: job.requestedUrl, finalUrl: job.finalUrl, collectionId: job.collectionId, identityKey: message.payload?.identityKey, expiresAt: Date.now() + SESSION_TTL_MS });
   }
   deliverTerminal(job, outgoing);
 });

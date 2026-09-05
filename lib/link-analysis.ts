@@ -55,10 +55,8 @@ export type LinkAnalysis = z.infer<typeof linkAnalysisSchema>;
 
 export type RawComment = Partial<CommentEvidence> & { text?: unknown; author?: unknown; avatar?: unknown; userId?: unknown };
 
-export function detectPlatform(value: string): SupportedPlatform {
-  try { const host = new URL(value).hostname.toLowerCase(); if (host.includes("douyin") || host.includes("iesdouyin")) return "douyin"; if (host.includes("bilibili") || host === "b23.tv") return "bilibili"; if (host.includes("xiaohongshu") || host === "xhslink.com") return "xiaohongshu"; } catch { /* invalid URL */ }
-  return "unknown";
-}
+export { platformForUrl as detectPlatform } from "./share-link.ts";
+import { platformForUrl as detectPlatform } from "./share-link.ts";
 
 export function normalizeLink(value: string) {
   const parsed = new URL(value.trim()); parsed.hash = "";

@@ -1,6 +1,6 @@
 (() => {
-  if (globalThis.__SHOTPRINT_COLLECTOR_V069__) return;
-  globalThis.__SHOTPRINT_COLLECTOR_V069__ = true;
+  if (globalThis.__SHOTPRINT_COLLECTOR_V071__) return;
+  globalThis.__SHOTPRINT_COLLECTOR_V071__ = true;
 
   const manifest = chrome.runtime.getManifest();
   const version = manifest.version_name || manifest.version;
@@ -9,6 +9,17 @@
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const sessionComments = new Map();
   let totalScrollActions = 0;
+  let sessionIdentity = "";
+  let collecting = false;
+
+  function workIdentity(value) {
+    const url = new URL(value);
+    const id = platform === "douyin"
+      ? url.searchParams.get("modal_id") || url.searchParams.get("aweme_id") || url.searchParams.get("item_id") || new URLSearchParams(url.hash.replace(/^#.*?\?/, "").replace(/^#/, "")).get("modal_id") || url.pathname.match(/\/(?:share\/)?video\/([\w-]+)/)?.[1]
+      : url.pathname.match(/\/(?:video|explore|discovery\/item|search_result)\/([\w-]+)/)?.[1];
+    return id ? { id, key: `${platform}:${id}${platform === "bilibili" ? `:p${url.searchParams.get("p") || "1"}` : ""}` } : null;
+  }
+  globalThis.__shotprintWorkIdentity = () => workIdentity(location.href);
 
   function cleanText(value) {
     return String(value || "").replace(/\s+/g, " ").trim().replace(/^回复\s+@[^:：]{1,80}[:：]\s*/i, "").replace(/@[\w\u4e00-\u9fff-]{1,40}/g, "@匿名用户").slice(0, 2000);
@@ -18,15 +29,16 @@
     const meta = (selector) => cleanText(document.querySelector(selector)?.getAttribute("content"));
     const canonicalCandidate = document.querySelector("link[rel='canonical']")?.getAttribute("href") || location.href;
     let canonicalUrl = location.href;
-    try { const parsed = new URL(canonicalCandidate, location.href); if (parsed.protocol === "https:" && parsed.hostname === location.hostname) canonicalUrl = parsed.toString(); } catch { /* keep the resolved address bar URL */ }
+    try { const parsed = new URL(canonicalCandidate, location.href); if (parsed.protocol === "https:" && parsed.hostname === location.hostname && workIdentity(parsed.href)?.key === workIdentity(location.href)?.key) canonicalUrl = parsed.toString(); } catch { /* keep the resolved address bar URL */ }
     const title = meta("meta[property='og:title']") || meta("meta[name='title']") || cleanText(document.querySelector("h1")?.textContent) || cleanText(document.title);
     const description = meta("meta[property='og:description']") || meta("meta[name='description']");
     const author = meta("meta[name='author']") || meta("meta[property='article:author']") || cleanText(document.querySelector("[data-e2e='video-author-name'], .author-name, .username")?.textContent);
     const publishedAt = meta("meta[property='video:release_date']") || meta("meta[property='article:published_time']");
     const coverUrl = document.querySelector("meta[property='og:image']")?.getAttribute("content") || undefined;
     const keywords = meta("meta[name='keywords']");
-    const videoId = canonicalUrl.match(/\/(?:video|explore|discovery\/item)\/([\w-]+)/i)?.[1] || "";
-    return { canonicalUrl, title: title.slice(0, 200), description: description.slice(0, 500), author: author.slice(0, 100), publishedAt, coverUrl, keywords: keywords.slice(0, 240), videoId: videoId.slice(0, 80) };
+    const identity = workIdentity(location.href);
+    const videoId = identity?.id || "";
+    return { canonicalUrl, identityKey: identity?.key || "", title: title.slice(0, 200), description: description.slice(0, 500), author: author.slice(0, 100), publishedAt, coverUrl, keywords: keywords.slice(0, 240), videoId: videoId.slice(0, 80) };
   }
 
   function visible(element) {
@@ -48,7 +60,7 @@
       .some((element) => visible(element));
     if (hasCaptchaUi || /请完成(?:安全)?验证|拖动滑块完成拼图|安全验证(?:中|失败)?/.test(gateText)) return "CAPTCHA_REQUIRED";
     if (/^(?:403(?:\s+(?:forbidden|error))?|forbidden|access denied)(?:\s*[-|:].*)?$/i.test(title)
-      || /sorry,? you have been blocked|error\s*403\s*[:|-]?\s*forbidden|403\s+forbidden|请求被拒绝|访问被拒绝/i.test(gateText)) return "HTTP_403";
+      || /sorry,? you have been blocked|error\s*403\s*[:|-]?\s*forbidden|403\s+forbidden|请求被拒绝|访问被拒绝|安全限制/i.test(gateText)) return "HTTP_403";
     if (/^(?:429(?:\s+(?:too many requests|error))?|too many requests)(?:\s*[-|:].*)?$/i.test(title)
       || /error\s*429|429\s+too many requests|请求过于频繁|操作过于频繁/i.test(gateText)) return "HTTP_429";
     if (/登录后(?:才能)?查看评论|请先登录(?:后)?查看评论|登录后参与评论/.test(gateText)
@@ -106,6 +118,7 @@
   function findDouyinCommentControl() {
     const controls = [
       "[data-e2e='video-comment-icon']",
+      "[data-e2e='feed-comment-icon']",
       "[data-e2e='browse-comment-icon']",
       "[data-e2e='comment-icon']",
       "button[aria-label*='评论']",
@@ -343,7 +356,7 @@
     const waitUntil = Math.min(deadline, Date.now() + 15000);
     let clicked = false;
     while (Date.now() < waitUntil) {
-      if (blockedReason() || douyinCommentItems().length || douyinCommentRoots().length) return;
+      if (blockedReason() || douyinCommentItems().length) return;
       if (!clicked) {
         const button = findDouyinCommentControl();
         if (button) { try { button.click(); clicked = true; } catch { /* best effort */ } }
@@ -382,11 +395,19 @@
     await waitForPageEvidence(deadline, requestId);
     if (platform === "douyin") await prepareDouyin(deadline, requestId);
     if (platform === "bilibili") await prepareBilibili(deadline, requestId);
+    const preparedBlock = blockedReason();
+    if (preparedBlock) return { url: location.href, comments: [], errorCode: preparedBlock };
+    const identityAtStart = workIdentity(location.href)?.key;
+    if (!identityAtStart) return { url: location.href, comments: [], errorCode: "TARGET_VIDEO_NOT_RESOLVED" };
+    const requestedIdentity = options.requestedUrl ? workIdentity(options.requestedUrl)?.key : null;
+    if (requestedIdentity && requestedIdentity !== identityAtStart) return { url: location.href, comments: [], errorCode: "TARGET_VIDEO_CHANGED" };
+    if (sessionIdentity !== identityAtStart) { sessionComments.clear(); totalScrollActions = 0; sessionIdentity = identityAtStart; }
     const byText = new Map(sessionComments);
     const scrollTrace = [];
     let noGrowthRounds = 0;
     let stopReason = "target_reached";
     for (let scroll = 0; scroll < 15 && Date.now() < deadline && byText.size < targetCount; scroll += 1) {
+      if (workIdentity(location.href)?.key !== identityAtStart) { sessionComments.clear(); return { url: location.href, comments: [], errorCode: "TARGET_VIDEO_CHANGED" }; }
       const before = byText.size;
       const current = platform === "bilibili" ? collectBilibili() : collectStandard();
       current.forEach((comment) => { if (!byText.has(comment.text)) byText.set(comment.text, comment); });
@@ -408,6 +429,7 @@
       if (scroll === 14) stopReason = "scroll_limit";
     }
     const finalPage = platform === "bilibili" ? collectBilibili() : collectStandard();
+    if (workIdentity(location.href)?.key !== identityAtStart) { sessionComments.clear(); return { url: location.href, comments: [], errorCode: "TARGET_VIDEO_CHANGED" }; }
     finalPage.forEach((comment) => { if (!byText.has(comment.text)) byText.set(comment.text, comment); });
     sessionComments.clear();
     [...byText.entries()].slice(0, 200).forEach(([key, value]) => sessionComments.set(key, value));
@@ -422,7 +444,7 @@
     if (platformStopReason) warnings.push(`${platformStopReason}:已停止采集，不绕过平台风控。`);
     if (!comments.length) warnings.push(platform === "bilibili" ? "已识别B站视频，但评论组件没有加载出可读评论。" : "当前页面没有找到已加载的可见评论。");
     const identity = pageIdentity();
-    return { url: identity.canonicalUrl, platform, ...identity, comments, engine: "extension-dom", strategyVersion: "extension-dom-v0.6.9", sampleCount: comments.length, targetCount, pageCount: 0, cursorCount: 0, totalVisible: comments.length, scrollActions: totalScrollActions - phaseStartScrolls, scrollTrace: scrollTrace.slice(-15), durationMs: Date.now() - startedAt, stopReason, continuationAvailable: comments.length >= 1 && comments.length < 200 && !platformStopReason, sortMode: "current-page-order", errorCode: platformStopReason || (unresolvedDouyinTarget ? "TARGET_VIDEO_NOT_RESOLVED" : !comments.length ? "PLATFORM_LAYOUT_CHANGED" : undefined), collectedAt: new Date().toISOString(), warnings };
+    return { url: identity.canonicalUrl, platform, ...identity, comments, engine: "extension-dom", strategyVersion: "extension-dom-v0.7.1", sampleCount: comments.length, targetCount, pageCount: 0, cursorCount: 0, totalVisible: comments.length, scrollActions: totalScrollActions - phaseStartScrolls, scrollTrace: scrollTrace.slice(-15), durationMs: Date.now() - startedAt, stopReason, continuationAvailable: comments.length >= 1 && comments.length < 200 && !platformStopReason, sortMode: "current-page-order", errorCode: platformStopReason || (unresolvedDouyinTarget ? "TARGET_VIDEO_NOT_RESOLVED" : !comments.length ? "PLATFORM_LAYOUT_CHANGED" : undefined), collectedAt: new Date().toISOString(), warnings };
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -431,18 +453,24 @@
       return;
     }
     if (message?.type !== "shotprint:collect-page") return;
+    if (collecting) { sendResponse({ accepted: false, reason: "COLLECTION_IN_PROGRESS" }); return; }
+    collecting = true;
     sendResponse({ accepted: true });
     chrome.runtime.sendMessage({ type: "shotprint:progress", stage: 2, requestId: message.requestId });
-    void collectPage(message.requestId, { targetCount: message.targetCount }).then((payload) => {
+    void collectPage(message.requestId, { targetCount: message.targetCount, requestedUrl: message.requestedUrl }).then((payload) => {
+      if (payload.errorCode === "PLATFORM_LAYOUT_CHANGED" && payload.identityKey) {
+        chrome.runtime.sendMessage({ type: "shotprint:comments", requestId: message.requestId, payload: { ...payload, commentStatus: "unavailable", warnings: [...(payload.warnings || []), "评论读取失败，不能据此判断该视频没有评论；仍可继续视频分析。"] } });
+        return;
+      }
       if (payload.errorCode && payload.comments.length === 0) {
         const messages = { CAPTCHA_REQUIRED: "页面要求验证码，采集已停止。", HTTP_403: "原页面返回403，采集已停止。", HTTP_429: "原页面返回429，采集已停止。", LOGIN_WALL: "原页面要求登录后查看评论。", TARGET_VIDEO_NOT_RESOLVED: "抖音短链进入了搜索结果页，但没有打开目标视频详情。请换用地址栏中的完整视频链接。", PLATFORM_LAYOUT_CHANGED: "页面已打开，但没有找到可读评论容器。" };
-        chrome.runtime.sendMessage({ type: "shotprint:error", requestId: message.requestId, code: payload.errorCode, step: "collect", recoverable: true, userMessage: messages[payload.errorCode] || "评论容器读取失败，请改用手动评论。" });
+        chrome.runtime.sendMessage({ type: "shotprint:error", requestId: message.requestId, code: payload.errorCode, step: "collect", recoverable: true, userMessage: payload.errorCode === "TARGET_VIDEO_CHANGED" ? "原页面已切换到另一个作品，请重新选择视频。" : messages[payload.errorCode] || "评论容器读取失败，请改用手动评论。" });
       } else {
         chrome.runtime.sendMessage({ type: "shotprint:comments", payload, requestId: message.requestId });
       }
     }).catch((error) => {
       console.warn("Shotprint collector runtime failure", String(error?.name || "Error").slice(0, 40));
       chrome.runtime.sendMessage({ type: "shotprint:error", requestId: message.requestId, code: "PLATFORM_LAYOUT_CHANGED", step: "collect", recoverable: true, userMessage: "评论读取失败，请刷新原页后重试。" });
-    });
+    }).finally(() => { collecting = false; });
   });
 })();

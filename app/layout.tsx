@@ -9,17 +9,17 @@ export async function generateMetadata(): Promise<Metadata> {
   const metadataBase = new URL(`${protocol}://${host}`);
   return {
     title: "镜谱 Shotprint",
-    description: "看懂观众反应，拆开镜头节奏，把值得借鉴的方法带进你的下一条内容。",
+    description: "看清观众为什么愿意看下去，找出真正起作用的镜头和节奏，把这些方法用进你的下一条视频。",
     metadataBase,
     openGraph: {
       title: "镜谱 Shotprint",
-      description: "别让爆款只躺在收藏夹。",
+      description: "别抄爆款，拆懂它。",
       images: [{ url: new URL("/og.png", metadataBase).toString(), width: 1737, height: 905 }],
     },
     twitter: {
       card: "summary_large_image",
       title: "镜谱 Shotprint",
-      description: "别让爆款只躺在收藏夹。",
+      description: "别抄爆款，拆懂它。",
       images: [new URL("/og.png", metadataBase).toString()],
     },
   };
