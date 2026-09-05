@@ -16,7 +16,7 @@
     "test:real": "node --experimental-strip-types tests/real-bailian.mjs",
     "scan:secrets": "node tests/secret-scan.mjs",
     "check": "tsc --noEmit && node --experimental-strip-types --test tests/*.test.ts && node tests/secret-scan.mjs && vinext build && node tests/e2e-runner.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .browser-act-* --ignore-pattern browser-act-skills --ignore-pattern .deploy-publish-* --ignore-pattern .pnpm-store",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .wrangler --ignore-pattern .browser-act-* --ignore-pattern browser-act-skills --ignore-pattern .deploy-publish-* --ignore-pattern .pnpm-store",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

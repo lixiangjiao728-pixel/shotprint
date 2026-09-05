@@ -12,7 +12,7 @@ const runtime = { ...process.env } as unknown as ShotprintEnv;
 runtime.STATE_STORE = new OssStateStore(runtime);
 (globalThis as typeof globalThis & { __SHOTPRINT_RUNTIME_ENV__?: ShotprintEnv }).__SHOTPRINT_RUNTIME_ENV__ = runtime;
 
-const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || "https://shotprint.xyz,https://shotprint-ai-film.lixiangjia27.chatgpt.site,http://localhost:3000,http://127.0.0.1:3000").split(",").map((value) => value.trim()).filter(Boolean));
+const allowedOrigins = new Set((process.env.ALLOWED_ORIGINS || "https://shotprint.xyz,http://localhost:3000,http://127.0.0.1:3000").split(",").map((value) => value.trim()).filter(Boolean));
 const maxBodyBytes = 32 * 1024 * 1024;
 const researchJobTtlMs = 10 * 60 * 1000;
 const analysisJobTtlMs = 30 * 60 * 1000;

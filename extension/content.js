@@ -1,5 +1,5 @@
 const host = location.hostname.toLowerCase();
-const isSite = host === "shotprint.xyz" || host === "shotprint-ai-film.lixiangjia27.chatgpt.site" || host === "localhost";
+const isSite = host === "shotprint.xyz";
 const platform = host.includes("douyin") || host.includes("iesdouyin") ? "douyin" : host.includes("bilibili") || host === "b23.tv" ? "bilibili" : host.includes("xiaohongshu") || host === "xhslink.com" ? "xiaohongshu" : "unknown";
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));

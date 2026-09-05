@@ -64,7 +64,8 @@ test("frontend routes paid calls through the configured Aliyun base", async () =
   assert.match(source, /视频分析：可用/);
   const backend = await readFile(new URL("../worker/aliyun-backend/server.ts", import.meta.url), "utf8");
   assert.match(backend, /ORIGIN_NOT_ALLOWED/);
-  assert.match(backend, /shotprint-ai-film\.lixiangjia27\.chatgpt\.site/);
+  assert.match(backend, /https:\/\/shotprint\.xyz/);
+  assert.doesNotMatch(backend, /chatgpt\.site/);
   assert.match(backend, /const runtime = \{ \.\.\.process\.env \}/);
   assert.doesNotMatch(backend, /const runtime = process\.env/);
 });

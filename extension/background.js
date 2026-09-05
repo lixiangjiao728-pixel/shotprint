@@ -12,9 +12,6 @@ const TERMINAL_DELIVERY_ATTEMPTS = 4;
 const COMPANION_URL = "http://127.0.0.1:43129";
 const SITE_ORIGINS = [
   "https://shotprint.xyz/*",
-  "https://shotprint-ai-film.lixiangjia27.chatgpt.site/*",
-  "http://localhost/*",
-  "http://127.0.0.1/*",
 ];
 const PLATFORM_ORIGINS = [
   "https://www.douyin.com/*", "https://*.douyin.com/*", "https://*.bilibili.com/*", "https://b23.tv/*",

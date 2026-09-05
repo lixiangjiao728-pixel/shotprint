@@ -15,14 +15,11 @@
     "https://*.xiaohongshu.com/*",
     "https://xhslink.com/*",
     "https://www.xhslink.com/*",
-    "https://shotprint.xyz/*",
-    "https://shotprint-ai-film.lixiangjia27.chatgpt.site/*",
-    "http://localhost/*",
-    "http://127.0.0.1/*"
+    "https://shotprint.xyz/*"
   ],
   "background": { "service_worker": "background.js", "type": "module" },
   "content_scripts": [{
-    "matches": ["https://shotprint.xyz/*", "https://shotprint-ai-film.lixiangjia27.chatgpt.site/*", "http://localhost/*", "http://127.0.0.1/*"],
+    "matches": ["https://shotprint.xyz/*"],
     "js": ["site-bridge.js"],
     "run_at": "document_idle"
   }]
